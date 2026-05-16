@@ -1928,7 +1928,7 @@ describe("createStudioServer daemon lifecycle", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         service: "kkaiapi",
-        model: "gpt-5.5",
+        model: "gpt-image-2",
       }),
     });
     expect(saveConfig.status).toBe(200);
@@ -1936,7 +1936,7 @@ describe("createStudioServer daemon lifecycle", () => {
     const raw = JSON.parse(await readFile(join(root, "inkos.json"), "utf-8"));
     expect(raw.llm.cover).toEqual({
       service: "kkaiapi",
-      model: "gpt-5.5",
+      model: "gpt-image-2",
     });
 
     const saveSecret = await app.request("http://localhost/api/v1/cover/secret/kkaiapi", {

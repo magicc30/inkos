@@ -328,7 +328,7 @@ export async function resolveCoverGenerationRequest(input: {
       api: "responses",
       baseUrl,
       endpoint,
-      model: input.coverModel || process.env.INKOS_COVER_MODEL || "gpt-5.5",
+      model: input.coverModel || process.env.INKOS_COVER_MODEL || "gpt-image-2",
       apiKey: resolveCoverApiKey(input.coverApiKeyEnv || "INKOS_COVER_API_KEY"),
     };
   }

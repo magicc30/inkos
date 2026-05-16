@@ -306,7 +306,7 @@ const ShortFictionRunParams = Type.Object({
     description: "Optional exact Responses endpoint for cover generation. Overrides coverBaseUrl.",
   })),
   coverModel: Type.Optional(Type.String({
-    description: "Optional image-capable Responses model. Default gpt-5.5.",
+    description: "Optional image-capable Responses model. Default gpt-image-2.",
   })),
   coverSize: Type.Optional(Type.String({
     description: "Optional image size, default 1024x1360.",

@@ -146,7 +146,7 @@ describe("public short-hit chain", () => {
           model: "deepseek-v4-flash",
           cover: {
             service: "kkaiapi",
-            model: "gpt-5.5",
+            model: "gpt-image-2",
           },
         },
         notify: [],
@@ -160,7 +160,7 @@ describe("public short-hit chain", () => {
       await expect(resolveCoverGenerationRequest({ root })).resolves.toMatchObject({
         api: "responses",
         baseUrl: "https://api.kkaiapi.com/v1",
-        model: "gpt-5.5",
+        model: "gpt-image-2",
         apiKey: "sk-cover",
       });
     } finally {

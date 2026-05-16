@@ -68,7 +68,7 @@ interface CoverConfigPayload {
 function CoverConfigCard() {
   const [providers, setProviders] = useState<readonly CoverProviderInfo[]>([]);
   const [service, setService] = useState("kkaiapi");
-  const [model, setModel] = useState("gpt-5.5");
+  const [model, setModel] = useState("gpt-image-2");
   const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [status, setStatus] = useState<"idle" | "loading" | "saving" | "saved" | "error">("loading");
@@ -85,7 +85,7 @@ function CoverConfigCard() {
         const nextService = payload.service ?? payload.providers[0]?.service ?? "kkaiapi";
         const provider = payload.providers.find((item) => item.service === nextService) ?? payload.providers[0];
         setService(nextService);
-        setModel(payload.model ?? provider?.defaultModel ?? "gpt-5.5");
+        setModel(payload.model ?? provider?.defaultModel ?? "gpt-image-2");
         setStatus("idle");
       })
       .catch((error) => {
@@ -113,7 +113,7 @@ function CoverConfigCard() {
   const handleServiceChange = (nextService: string) => {
     const provider = providers.find((item) => item.service === nextService);
     setService(nextService);
-    setModel(provider?.defaultModel ?? "gpt-5.5");
+    setModel(provider?.defaultModel ?? "gpt-image-2");
     setStatus("idle");
     setMessage("");
   };
