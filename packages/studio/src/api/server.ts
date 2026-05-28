@@ -26,6 +26,7 @@ import {
   resolveServicePreset,
   resolveServiceProviderFamily,
   resolveServiceModelsBaseUrl,
+  guessServiceFromBaseUrl,
   resolveServiceModel,
   loadSecrets,
   saveSecrets,
@@ -537,9 +538,14 @@ type LLMConfigSource = "env" | "studio";
 interface EnvConfigSummary {
   detected: boolean;
   provider: string | null;
+  service?: string | null;
   baseUrl: string | null;
   model: string | null;
   hasApiKey: boolean;
+}
+
+interface EnvConfigValues extends EnvConfigSummary {
+  apiKey: string | null;
 }
 
 interface EnvConfigStatus {
@@ -727,7 +733,26 @@ async function saveRawConfig(root: string, config: Record<string, unknown>): Pro
   await writeFile(join(root, "inkos.json"), JSON.stringify(config, null, 2), "utf-8");
 }
 
-async function readEnvConfigSummary(path: string): Promise<EnvConfigSummary> {
+function unquoteEnvValue(value: string): string {
+  const trimmed = value.trim();
+  if ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function toEnvConfigSummary(values: EnvConfigValues): EnvConfigSummary {
+  return {
+    detected: values.detected,
+    provider: values.provider,
+    service: values.service ?? null,
+    baseUrl: values.baseUrl,
+    model: values.model,
+    hasApiKey: values.hasApiKey,
+  };
+}
+
+async function readEnvConfigValues(path: string): Promise<EnvConfigValues> {
   try {
     const raw = await readFile(path, "utf-8");
     const values = new Map<string, string>();
@@ -738,42 +763,55 @@ async function readEnvConfigSummary(path: string): Promise<EnvConfigSummary> {
       const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
       if (!match) continue;
       const [, key, value] = match;
-      values.set(key, value.trim());
+      values.set(key, unquoteEnvValue(value));
     }
 
     const provider = values.get("INKOS_LLM_PROVIDER") ?? null;
+    const service = values.get("INKOS_LLM_SERVICE") ?? null;
     const baseUrl = values.get("INKOS_LLM_BASE_URL") ?? null;
     const model = values.get("INKOS_LLM_MODEL") ?? null;
     const apiKey = values.get("INKOS_LLM_API_KEY") ?? "";
-    const detected = Boolean(provider || baseUrl || model || apiKey);
+    const detected = Boolean(provider || service || baseUrl || model || apiKey);
 
     return {
       detected,
       provider,
+      service,
       baseUrl,
       model,
       hasApiKey: apiKey.length > 0,
+      apiKey: apiKey.length > 0 ? apiKey : null,
     };
   } catch {
     return {
       detected: false,
       provider: null,
+      service: null,
       baseUrl: null,
       model: null,
       hasApiKey: false,
+      apiKey: null,
     };
   }
 }
 
 async function readEnvConfigStatus(root: string): Promise<EnvConfigStatus> {
-  const project = await readEnvConfigSummary(join(root, ".env"));
-  const global = await readEnvConfigSummary(GLOBAL_ENV_PATH);
+  const project = await readEnvConfigValues(join(root, ".env"));
+  const global = await readEnvConfigValues(GLOBAL_ENV_PATH);
   return {
-    project,
-    global,
+    project: toEnvConfigSummary(project),
+    global: toEnvConfigSummary(global),
     effectiveSource: project.detected ? "project" : global.detected ? "global" : null,
     runtimeUsesEnv: false,
   };
+}
+
+async function readEffectiveEnvConfigValues(root: string): Promise<{ source: "project" | "global"; values: EnvConfigValues } | null> {
+  const project = await readEnvConfigValues(join(root, ".env"));
+  if (project.detected) return { source: "project", values: project };
+  const global = await readEnvConfigValues(GLOBAL_ENV_PATH);
+  if (global.detected) return { source: "global", values: global };
+  return null;
 }
 
 async function resolveConfiguredServiceBaseUrl(root: string, serviceId: string, inlineBaseUrl?: string): Promise<string | undefined> {
@@ -1755,6 +1793,50 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       configSource: "studio" satisfies LLMConfigSource,
       storedConfigSource: normalizeConfigSource(llm.configSource),
       envConfig,
+    });
+  });
+
+  app.post("/api/v1/services/config/import-env", async (c) => {
+    const env = await readEffectiveEnvConfigValues(root);
+    if (!env || !env.values.apiKey) {
+      return c.json({
+        error: "未检测到可导入的 LLM 环境变量配置，或缺少 INKOS_LLM_API_KEY。",
+      }, 400);
+    }
+
+    const config = await loadRawConfig(root);
+    config.llm = config.llm ?? {};
+    const llm = config.llm as Record<string, unknown>;
+    const existingServices = normalizeServiceConfig(llm.services);
+    const explicitService = env.values.service?.trim();
+    const guessedService = env.values.baseUrl ? guessServiceFromBaseUrl(env.values.baseUrl) : null;
+    const service = explicitService || guessedService || "custom";
+
+    const entry: ServiceConfigEntry = service === "custom"
+      ? {
+          service: "custom",
+          name: "Env LLM",
+          ...(env.values.baseUrl ? { baseUrl: env.values.baseUrl } : {}),
+        }
+      : { service };
+    const serviceKey = serviceConfigKey(entry);
+
+    llm.services = mergeServiceConfig(existingServices, [entry]);
+    llm.service = serviceKey;
+    llm.configSource = "studio";
+    if (env.values.model) llm.defaultModel = env.values.model;
+    syncTopLevelLlmMirror(llm);
+
+    const secrets = await loadSecrets(root);
+    secrets.services[serviceKey] = { apiKey: env.values.apiKey };
+    await saveSecrets(root, secrets);
+    await saveRawConfig(root, config);
+
+    return c.json({
+      ok: true,
+      source: env.source,
+      service: serviceKey,
+      defaultModel: env.values.model ?? null,
     });
   });
 

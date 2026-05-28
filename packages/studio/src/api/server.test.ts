@@ -245,6 +245,7 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     resolveServicePreset: resolveServicePresetMock,
     resolveServiceProviderFamily: resolveServiceProviderFamilyMock,
     resolveServiceModelsBaseUrl: resolveServiceModelsBaseUrlMock,
+    guessServiceFromBaseUrl: actual.guessServiceFromBaseUrl,
     resolveServiceModel: resolveServiceModelMock,
     COVER_PROVIDER_PRESETS: actual.COVER_PROVIDER_PRESETS,
     coverSecretKey: actual.coverSecretKey,
@@ -1173,6 +1174,48 @@ describe("createStudioServer daemon lifecycle", () => {
         },
       },
     });
+  });
+
+  it("imports detected env config into Studio services without exposing the key", async () => {
+    await writeFile(join(tmpdir(), "inkos-global.env"), [
+      "INKOS_LLM_PROVIDER=openai",
+      "INKOS_LLM_BASE_URL=https://api.kkaiapi.com/v1",
+      "INKOS_LLM_MODEL=deepseek-v4-flash",
+      "INKOS_LLM_API_KEY=sk-global",
+    ].join("\n"), "utf-8");
+    loadSecretsMock.mockResolvedValue({ services: {} });
+
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/services/config/import-env", {
+      method: "POST",
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      source: "global",
+      service: "kkaiapi",
+      defaultModel: "deepseek-v4-flash",
+    });
+    expect(saveSecretsMock).toHaveBeenCalledWith(root, {
+      services: {
+        kkaiapi: { apiKey: "sk-global" },
+      },
+    });
+
+    const raw = JSON.parse(await readFile(join(root, "inkos.json"), "utf-8"));
+    expect(raw.llm).toMatchObject({
+      service: "kkaiapi",
+      defaultModel: "deepseek-v4-flash",
+      configSource: "studio",
+      provider: "openai",
+      baseUrl: "https://api.kkaiapi.com/v1",
+      model: "deepseek-v4-flash",
+    });
+    expect(raw.llm.services).toEqual([{ service: "kkaiapi" }]);
+    expect(JSON.stringify(raw)).not.toContain("sk-global");
   });
 
   it("allows switching config source without overwriting services", async () => {
