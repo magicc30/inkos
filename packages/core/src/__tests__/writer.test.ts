@@ -1339,7 +1339,7 @@ describe("WriterAgent", () => {
       const creativePrompt = (chatSpy.mock.calls[0]?.[0] as ReadonlyArray<{ content: string }> | undefined)?.[1]?.content ?? "";
 
       expect(systemPrompt).not.toContain("Hook-A / Hook-B");
-      expect(systemPrompt).toContain("真实 hook_id");
+      expect(systemPrompt).toContain("Real hook_id"); // English book gets the English output scaffold
       // Enum/identifier fields (hookId, movement, chapterType) are NOT sanitized —
       // the writer needs them to understand which hook to move and what chapter type
       // to write. Free-text fields (goal, instruction, targetEffect) ARE sanitized.

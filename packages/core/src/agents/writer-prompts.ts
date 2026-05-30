@@ -35,9 +35,13 @@ export function buildWriterSystemPrompt(
   const governed = inputProfile === "governed";
   const resolvedLengthSpec = lengthSpec ?? buildLengthSpec(book.chapterWordCount, isEnglish ? "en" : "zh");
 
-  const outputSection = mode === "creative"
-    ? buildCreativeOutputFormat(book, genreProfile, resolvedLengthSpec)
-    : buildOutputFormat(book, genreProfile, resolvedLengthSpec);
+  const outputSection = isEnglish
+    ? (mode === "creative"
+        ? buildEnglishCreativeOutputFormat(book, genreProfile, resolvedLengthSpec)
+        : buildEnglishOutputFormat(book, genreProfile, resolvedLengthSpec))
+    : (mode === "creative"
+        ? buildCreativeOutputFormat(book, genreProfile, resolvedLengthSpec)
+        : buildOutputFormat(book, genreProfile, resolvedLengthSpec));
 
   const sections = isEnglish
     ? [
@@ -896,4 +900,115 @@ ${updatedLedger}
 - **关系**: 某角色(关系性质/Ch#) | ...
 - **已知**: 该角色已知的信息（仅限亲历或被告知）
 - **未知**: 该角色不知道的信息`;
+}
+
+// ---------------------------------------------------------------------------
+// English output formats (parser keys off the === MARKER === anchors, so the
+// table labels below are safely localized; persisted artifacts read English).
+// ---------------------------------------------------------------------------
+
+function buildEnglishPreWriteTable(gp: GenreProfile): string {
+  const resourceRow = gp.numericalSystem
+    ? "| Current resource total | X | match the ledger |\n| This chapter's gain | +X (source) | write +0 if none |\n"
+    : "";
+
+  return `=== PRE_WRITE_CHECK ===
+(Output a Markdown table. Every row aligns with the seven chapter_memo sections, not the volume outline.)
+| Check | This chapter | Note |
+|-------|--------------|------|
+| Current task | Restate the chapter_memo "Current task" and the concrete action this chapter takes | Be specific, not abstract |
+| What the reader is waiting for | How this chapter handles it: create / delay / pay off | Match the memo |
+| Pay off / keep hidden | Foreshadowing to pay off + cards that must stay down | Quote the memo |
+| Routine / transition duty | If any routine or transition passage exists, state each one's function | Match the memo mapping |
+| Required end-of-chapter change | 1-3 concrete changes from the memo's end-of-chapter change | Must land on the page |
+| Do not | Restate the memo "Do not" list | The prose must not touch these |
+| Context range | Ch X to Ch Y / state card / setting files | |
+| Current anchor | Location / opponent / payoff goal | Anchor must be concrete |
+${resourceRow}| Hooks to resolve | Real hook_id (write none if absent) | Match the hook pool |
+| This chapter's conflict | One line | |
+| Chapter type | ${gp.chapterTypes.join(" / ")} | |
+| Risk scan | OOC / info leak / canon conflict${gp.powerScaling ? " / power-scaling break" : ""} / pacing / word fatigue | |`;
+}
+
+function buildEnglishContentBlocks(lengthSpec: LengthSpec): string {
+  return `=== CHAPTER_TITLE ===
+(Chapter title, without "Chapter X". It must differ from existing titles; do not reuse the same or similar titles. If recent title history or high-frequency title words are provided, avoid repeated roots and overused imagery.)
+
+=== CHAPTER_CONTENT ===
+(Chapter prose. Target ${lengthSpec.target} words, acceptable range ${lengthSpec.softMin}-${lengthSpec.softMax} words.)`;
+}
+
+function buildEnglishCreativeOutputFormat(_book: BookConfig, gp: GenreProfile, lengthSpec: LengthSpec): string {
+  return `## Output Format (follow strictly)
+
+${buildEnglishPreWriteTable(gp)}
+
+${buildEnglishContentBlocks(lengthSpec)}
+
+[Important] Output only the three blocks above (PRE_WRITE_CHECK, CHAPTER_TITLE, CHAPTER_CONTENT). State cards, hook pool, and summaries are handled by the later settlement stage; do not output them.`;
+}
+
+function buildEnglishOutputFormat(_book: BookConfig, gp: GenreProfile, lengthSpec: LengthSpec): string {
+  const postSettlement = gp.numericalSystem
+    ? `=== POST_SETTLEMENT ===
+(If any numerical change occurred, output a Markdown table.)
+| Item | This chapter | Note |
+|------|--------------|------|
+| Resource ledger | open X / gain +Y / close Z | write +0 if none |
+| Key resources | name -> contribution +Y (basis) | write "none" if none |
+| Hook changes | new / resolved / deferred hook | sync the hook pool |`
+    : `=== POST_SETTLEMENT ===
+(If any hook changed, output this.)
+| Item | This chapter | Note |
+|------|--------------|------|
+| Hook changes | new / resolved / deferred hook | sync the hook pool |`;
+
+  const updatedLedger = gp.numericalSystem
+    ? `\n=== UPDATED_LEDGER ===\n(The full updated resource ledger, Markdown table.)`
+    : "";
+
+  return `## Output Format (follow strictly)
+
+${buildEnglishPreWriteTable(gp)}
+
+${buildEnglishContentBlocks(lengthSpec)}
+
+${postSettlement}
+
+=== UPDATED_STATE ===
+(The full updated state card, Markdown table.)
+${updatedLedger}
+=== UPDATED_HOOKS ===
+(The full updated hook pool, Markdown table.)
+
+=== CHAPTER_SUMMARY ===
+(Chapter summary as a Markdown table with these columns.)
+| Chapter | Title | Characters | Key events | State change | Hook dynamics | Emotional tone | Chapter type |
+|---------|-------|------------|------------|--------------|---------------|----------------|--------------|
+| N | this chapter's title | Char1, Char2 | one-line summary | key change | H01 planted / H02 advanced | emotional arc | ${gp.chapterTypes.length > 0 ? gp.chapterTypes.join(" / ") : "transition / conflict / climax / resolution"} |
+
+=== UPDATED_SUBPLOTS ===
+(The full updated subplot board, Markdown table.)
+| Subplot ID | Name | Characters | Start ch | Last active ch | Chapters since | Status | Progress | Resolve ETA |
+|------------|------|------------|----------|----------------|----------------|--------|----------|-------------|
+
+=== UPDATED_EMOTIONAL_ARCS ===
+(The full updated emotional arcs, Markdown table.)
+| Character | Chapter | Emotional state | Trigger | Intensity (1-10) | Arc direction |
+|-----------|---------|-----------------|---------|------------------|---------------|
+
+=== UPDATED_CHARACTER_MATRIX ===
+(The updated character matrix, one ## block per character.)
+
+## Character Name
+- **Role**: protagonist / antagonist / ally / supporting / mentioned
+- **Tags**: core identity tags
+- **Contrast**: a distinctive detail that breaks the stereotype
+- **Voice**: how they speak
+- **Personality**: underlying temperament
+- **Motivation**: core driving force
+- **Current**: this chapter's immediate goal
+- **Relations**: Character (relationship / Ch#) | ...
+- **Knows**: what this character knows (only what they witnessed or were told)
+- **Unknown**: what this character does not know`;
 }

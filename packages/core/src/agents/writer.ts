@@ -1037,10 +1037,18 @@ ${overrides}\n`;
       return;
     }
 
-    const missing: string[] = [];
-    if (!preWriteCheck.includes("当前任务")) missing.push("当前任务");
-    if (!preWriteCheck.includes("不要做")) missing.push("不要做");
-    if (!preWriteCheck.includes("章尾")) missing.push("章尾必须发生的改变");
+    const required = language === "en"
+      ? [
+          { needle: "Current task", label: "Current task" },
+          { needle: "Do not", label: "Do not" },
+          { needle: "end-of-chapter", label: "Required end-of-chapter change" },
+        ]
+      : [
+          { needle: "当前任务", label: "当前任务" },
+          { needle: "不要做", label: "不要做" },
+          { needle: "章尾", label: "章尾必须发生的改变" },
+        ];
+    const missing = required.filter((r) => !preWriteCheck.includes(r.needle)).map((r) => r.label);
 
     if (missing.length > 0) {
       this.logWarn(language, {
