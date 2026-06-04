@@ -121,6 +121,42 @@ describe("ComposerAgent", () => {
     await expect(readFile(result.contextPath, "utf-8")).resolves.toContain("current_focus.md");
   });
 
+  it("preserves later author-intent constraints instead of reducing them to the first line", async () => {
+    await writeFile(
+      join(storyDir, "author_intent.md"),
+      [
+        "# Author Intent",
+        "",
+        "标题：《桥洞来信》",
+        "",
+        "必须使用第一人称叙事，不得改成第三人称。",
+        "主角的每次决定都要围绕“我不再替别人背债”展开。",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const composer = new ComposerAgent({
+      client: {} as ConstructorParameters<typeof ComposerAgent>[0]["client"],
+      model: "test-model",
+      projectRoot: root,
+      bookId: book.id,
+    });
+
+    const result = await composer.composeChapter({
+      book,
+      bookDir,
+      chapterNumber: 4,
+      plan,
+    });
+
+    const authorIntentEntry = result.contextPackage.selectedContext.find((entry) =>
+      entry.source === "story/author_intent.md",
+    );
+    expect(authorIntentEntry?.excerpt).toContain("标题：《桥洞来信》");
+    expect(authorIntentEntry?.excerpt).toContain("必须使用第一人称叙事，不得改成第三人称。");
+    expect(authorIntentEntry?.excerpt).toContain("我不再替别人背债");
+  });
+
   it("emits a rule stack with hard, soft, and diagnostic sections", async () => {
     const composer = new ComposerAgent({
       client: {} as ConstructorParameters<typeof ComposerAgent>[0]["client"],
@@ -171,6 +207,13 @@ describe("ComposerAgent", () => {
 
     expect(result.trace.plannerInputs).toEqual(plan.plannerInputs);
     expect(result.trace.selectedSources).toContain("story/current_focus.md");
+    expect(result.trace.contextTiers.protectedSources).toContain("story/current_focus.md");
+    expect(result.trace.contextTiers.protectedSources).toContain("story/author_intent.md");
+    expect(result.trace.contextTiers.compressibleSources).not.toContain("story/author_intent.md");
+    expect(result.trace.tokenBudget.protectedTokens).toBeGreaterThan(0);
+    expect(result.trace.tokenBudget.totalSelectedTokens).toBeGreaterThanOrEqual(
+      result.trace.tokenBudget.protectedTokens,
+    );
     // trace.notes dropped with ChapterConflict removal (Phase 1 transitional)
     expect(result.trace.notes).toEqual([]);
     await expect(readFile(result.tracePath, "utf-8")).resolves.toContain("story/current_focus.md");

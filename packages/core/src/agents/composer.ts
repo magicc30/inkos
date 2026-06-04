@@ -113,11 +113,13 @@ async function collectSelectedContext(
         }];
 
     const entries = await Promise.all([
-      maybeContextSource(storyDir, "current_focus.md", "Current task focus for this chapter."),
+      maybeContextSource(storyDir, "current_focus.md", "Current task focus for this chapter.", [], { preserveFull: true }),
       maybeContextSource(
         storyDir,
         "author_intent.md",
         "User's long-term authorial intent and direction — binding, overrides model defaults.",
+        [],
+        { preserveFull: true },
       ),
       maybeContextSource(
         storyDir,
@@ -374,6 +376,7 @@ async function maybeContextSource(
   fileName: string,
   reason: string,
   preferredExcerpts: ReadonlyArray<string> = [],
+  options: { readonly preserveFull?: boolean } = {},
 ): Promise<ContextPackage["selectedContext"][number] | null> {
     const path = join(storyDir, fileName);
     let content = await readFileOrDefault(path);
@@ -398,7 +401,7 @@ async function maybeContextSource(
     return {
       source: `story/${resolvedFileName}`,
       reason,
-      excerpt: pickExcerpt(content, preferredExcerpts),
+      excerpt: options.preserveFull ? content.trim() : pickExcerpt(content, preferredExcerpts),
     };
 }
 
