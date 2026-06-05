@@ -1,6 +1,6 @@
 import { normalizePlatformOrOther, defaultChapterLength, type Platform } from "@actalk/inkos-core";
-export { waitForStudioBookReady } from "../lib/book-ready";
-export type { StudioBookDetail, WaitForStudioBookReadyOptions } from "../lib/book-ready";
+export { waitForStudioBookReady } from "../lib/book-ready.js";
+export type { StudioBookDetail, WaitForStudioBookReadyOptions } from "../lib/book-ready.js";
 
 export interface StudioCreateBookBody {
   readonly title: string;
