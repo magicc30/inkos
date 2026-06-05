@@ -50,7 +50,17 @@ defer:
 `.trim();
 
 function validMemoRaw(chapter: number): string {
-  return `---\nchapter: ${chapter}\ngoal: 把七号门被动过手脚钉成现场实证\nisGoldenOpening: false\nthreadRefs:\n  - H03\n  - S004\n---\n${VALID_BODY}\n`;
+  return `# 第 ${chapter} 章 memo
+
+## 本章目标
+把七号门被动过手脚钉成现场实证
+
+## 关联线索
+- H03
+- S004
+
+${VALID_BODY}
+`;
 }
 
 const ZERO_USAGE = {
@@ -185,11 +195,11 @@ describe("PlannerAgent.planChapter memo generation", () => {
   it("retries when the first response is malformed and succeeds on retry", async () => {
     const chatSpy = vi.spyOn(llmProvider, "chatCompletion")
       .mockResolvedValueOnce({
-        content: "no frontmatter here",
+        content: "no memo sections here",
         usage: ZERO_USAGE,
       } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
       .mockResolvedValueOnce({
-        content: "still no frontmatter",
+        content: "still no memo sections",
         usage: ZERO_USAGE,
       } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
       .mockResolvedValueOnce({
@@ -256,7 +266,16 @@ defer:
 - Do not directly name the mastermind.
 `.trim();
 
-    const validEnRaw = `---\nchapter: 1\ngoal: Pin Door 7 tampering as live evidence\nisGoldenOpening: false\nthreadRefs:\n  - H03\n---\n${VALID_EN_BODY}\n`;
+    const validEnRaw = `# Chapter 1 memo
+
+## Chapter goal
+Pin Door 7 tampering as live evidence
+
+## Thread refs
+- H03
+
+${VALID_EN_BODY}
+`;
 
     const chatSpy = vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
       content: validEnRaw,

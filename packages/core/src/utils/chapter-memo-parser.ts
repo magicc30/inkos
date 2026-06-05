@@ -1,4 +1,3 @@
-import YAML from "js-yaml";
 import { ChapterMemoSchema, type ChapterMemo } from "../models/input-governance.js";
 
 export class PlannerParseError extends Error {
@@ -41,6 +40,9 @@ const REQUIRED_SECTIONS: ReadonlyArray<RequiredSection> = [
   { zh: "## 不要做", en: "## Do not", minContentChars: 1 },
 ];
 
+const GOAL_HEADINGS = ["## 本章目标", "## Chapter goal"] as const;
+const THREAD_HEADINGS = ["## 关联线索", "## Thread refs", "## Related threads"] as const;
+
 /**
  * Extract the content between `heading` and the next `## ...` heading (or
  * end-of-body). Strips whitespace and returns "" if the section payload is
@@ -59,60 +61,95 @@ function extractSectionContent(body: string, heading: string): string {
   return sectionRaw.replace(/\s+/g, " ").trim();
 }
 
+function stripWrappingFence(raw: string): string {
+  const trimmed = raw.trim();
+  const fenced = trimmed.match(/^```(?:md|markdown)?\s*\n([\s\S]*?)\n```\s*$/i);
+  return fenced?.[1]?.trim() ?? trimmed;
+}
+
+function dropLeadingProse(raw: string): string {
+  const markers = [
+    "# 第 ",
+    "# Chapter ",
+    ...GOAL_HEADINGS,
+    ...THREAD_HEADINGS,
+    ...REQUIRED_SECTIONS.flatMap((section) => [section.zh, section.en]),
+  ];
+  let first = -1;
+  for (const marker of markers) {
+    const index = raw.indexOf(marker);
+    if (index >= 0 && (first < 0 || index < first)) {
+      first = index;
+    }
+  }
+  return first >= 0 ? raw.slice(first).trim() : raw.trim();
+}
+
+function extractAnyHeading(body: string, headings: ReadonlyArray<string>): string {
+  for (const heading of headings) {
+    const content = extractSectionContent(body, heading);
+    if (content) return content;
+  }
+  return "";
+}
+
+function extractGoal(body: string): string {
+  const explicitGoal = extractAnyHeading(body, GOAL_HEADINGS);
+  if (explicitGoal) {
+    return explicitGoal.split(/\n|。|\. /)[0]?.trim() ?? "";
+  }
+  return "";
+}
+
+function extractThreadRefs(body: string): string[] {
+  const block = extractAnyHeading(body, THREAD_HEADINGS);
+  if (!block || /^(无|none|n\/a|na|—|-|\(none\))$/i.test(block.trim())) {
+    return [];
+  }
+  const matches = block.match(/\b[A-Za-z][A-Za-z0-9_-]*\d+[A-Za-z0-9_-]*\b/g) ?? [];
+  return [...new Set(matches)];
+}
+
+function extractMemoBody(markdown: string): string {
+  const starts = REQUIRED_SECTIONS
+    .flatMap((section) => [section.zh, section.en])
+    .map((heading) => markdown.indexOf(heading))
+    .filter((index) => index >= 0);
+  if (starts.length === 0) return markdown.trim();
+  return markdown.slice(Math.min(...starts)).trim();
+}
+
 /**
  * Parse a planner memo produced by the LLM.
  *
- * Format: YAML frontmatter delimited by `---\n...\n---\n` followed by a
- * markdown body containing the seven required section headings.
+ * Format: plain Markdown containing a `## 本章目标` / `## Chapter goal`
+ * section, an optional thread-ref section, and the required memo section
+ * headings.
  *
- * Strict on core fields (chapter integer + matches expected, goal non-empty
- * and ≤ 50 chars, required section headings present). Lenient on aux fields
- * (threadRefs coerced to string[], defaults to []).
+ * Strict on the LLM-owned fields (goal non-empty and ≤ 50 chars, required
+ * section headings present). Caller-owned fields (chapter / golden-opening)
+ * come from the host, not from the model.
  *
- * `isGoldenOpening` is authoritative from the caller — any value the LLM
- * includes in the frontmatter is ignored.
+ * The parser strips a wrapping Markdown code fence and any leading assistant
+ * prose ("好的，下面是...") before the first memo heading. It does not accept
+ * YAML frontmatter as a required model protocol anymore.
  */
 export function parseMemo(
   raw: string,
   expectedChapter: number,
   isGoldenOpening: boolean,
 ): ChapterMemo {
-  const trimmed = raw.trim();
-  const match = trimmed.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
-  if (!match) {
-    throw new PlannerParseError("missing YAML frontmatter delimiters");
-  }
+  const markdown = dropLeadingProse(stripWrappingFence(raw));
+  const goal = extractGoal(markdown);
+  const body = extractMemoBody(markdown);
+  const threadRefs = extractThreadRefs(markdown);
 
-  const yamlText = match[1]!;
-  const body = match[2]!.trim();
-
-  let fm: unknown;
-  try {
-    fm = YAML.load(yamlText);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new PlannerParseError(`invalid YAML in frontmatter: ${message}`);
-  }
-  if (!fm || typeof fm !== "object" || Array.isArray(fm)) {
-    throw new PlannerParseError("frontmatter is not an object");
-  }
-  const f = fm as Record<string, unknown>;
-
-  if (typeof f.chapter !== "number" || !Number.isInteger(f.chapter)) {
-    throw new PlannerParseError("chapter must be an integer");
-  }
-  if (f.chapter !== expectedChapter) {
-    throw new PlannerParseError(
-      `chapter mismatch: expected ${expectedChapter}, got ${f.chapter}`,
-    );
-  }
-
-  if (typeof f.goal !== "string" || f.goal.length === 0) {
+  if (goal.length === 0) {
     throw new PlannerParseError("goal must be a non-empty string");
   }
-  if (f.goal.length > 50) {
+  if (goal.length > 50) {
     throw new PlannerParseError(
-      `goal too long: ${f.goal.length} chars (max 50)`,
+      `goal too long: ${goal.length} chars (max 50)`,
     );
   }
 
@@ -143,13 +180,9 @@ export function parseMemo(
     throw new PlannerParseError(`empty sections: ${detail}`);
   }
 
-  const threadRefs = Array.isArray(f.threadRefs)
-    ? f.threadRefs.filter((value): value is string => typeof value === "string")
-    : [];
-
   return ChapterMemoSchema.parse({
-    chapter: f.chapter,
-    goal: f.goal,
+    chapter: expectedChapter,
+    goal,
     isGoldenOpening,
     body,
     threadRefs,

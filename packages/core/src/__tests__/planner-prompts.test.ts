@@ -10,8 +10,10 @@ describe("PLANNER_MEMO_SYSTEM_PROMPT", () => {
   it("contains key methodology phrases from new.txt", () => {
     expect(PLANNER_MEMO_SYSTEM_PROMPT).toContain("1 主线 + 1 支线");
     expect(PLANNER_MEMO_SYSTEM_PROMPT).toContain("三连问");
-    expect(PLANNER_MEMO_SYSTEM_PROMPT).toContain("YAML frontmatter");
-    expect(PLANNER_MEMO_SYSTEM_PROMPT).toContain("goal 字段不超过 50 字");
+    expect(PLANNER_MEMO_SYSTEM_PROMPT).toContain("不要 YAML frontmatter");
+    expect(PLANNER_MEMO_SYSTEM_PROMPT).toContain("## 本章目标");
+    expect(PLANNER_MEMO_SYSTEM_PROMPT).toContain("## 关联线索");
+    expect(PLANNER_MEMO_SYSTEM_PROMPT).toContain("不超过 50 字");
     expect(PLANNER_MEMO_SYSTEM_PROMPT).toContain("## 当前任务");
     expect(PLANNER_MEMO_SYSTEM_PROMPT).toContain("## 不要做");
   });

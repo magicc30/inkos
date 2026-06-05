@@ -45,50 +45,51 @@ defer:
 
 function makeRaw(
   opts: {
-    chapter?: number | string;
     goal?: string;
-    isGoldenOpening?: boolean | string;
     threadRefs?: ReadonlyArray<string> | null | unknown;
     body?: string;
-    dropFrontmatter?: boolean;
+    prefix?: string;
+    fenced?: boolean;
   } = {},
 ): string {
-  if (opts.dropFrontmatter) {
-    return opts.body ?? SECTIONS;
-  }
-
-  const threadRefsText = Array.isArray(opts.threadRefs)
-    ? `threadRefs:\n${opts.threadRefs.map((id) => `  - ${id}`).join("\n")}`
-    : opts.threadRefs === null
-      ? "threadRefs: null"
-      : opts.threadRefs === undefined
-        ? "threadRefs: []"
-        : `threadRefs: ${String(opts.threadRefs)}`;
-
-  const frontmatter = [
-    `chapter: ${opts.chapter ?? 12}`,
-    `goal: ${opts.goal ?? "把七号门被动过手脚钉成现场实证"}`,
-    `isGoldenOpening: ${opts.isGoldenOpening ?? false}`,
-    threadRefsText,
+  const refs = Array.isArray(opts.threadRefs)
+    ? opts.threadRefs.map((id) => `- ${id}`).join("\n")
+    : "";
+  const raw = [
+    `# 第 12 章 memo`,
+    "",
+    "## 本章目标",
+    opts.goal ?? "把七号门被动手脚钉成实证",
+    "",
+    "## 关联线索",
+    refs || "无",
+    "",
+    opts.body ?? SECTIONS,
   ].join("\n");
-
-  return `---\n${frontmatter}\n---\n${opts.body ?? SECTIONS}\n`;
+  const withPrefix = `${opts.prefix ?? ""}${raw}`;
+  return opts.fenced ? `\`\`\`markdown\n${withPrefix}\n\`\`\`` : withPrefix;
 }
 
 describe("parseMemo", () => {
-  it("parses a valid frontmatter + 7 sections", () => {
+  it("parses a valid markdown memo without YAML frontmatter", () => {
     const memo = parseMemo(makeRaw({ threadRefs: ["H03", "S004"] }), 12, false);
     expect(memo.chapter).toBe(12);
-    expect(memo.goal).toBe("把七号门被动过手脚钉成现场实证");
+    expect(memo.goal).toBe("把七号门被动手脚钉成实证");
     expect(memo.isGoldenOpening).toBe(false);
     expect(memo.threadRefs).toEqual(["H03", "S004"]);
     expect(memo.body).toContain("## 当前任务");
     expect(memo.body).toContain("## 不要做");
   });
 
-  it("throws when frontmatter delimiters are missing", () => {
-    expect(() => parseMemo(SECTIONS, 12, false)).toThrow(PlannerParseError);
-    expect(() => parseMemo(SECTIONS, 12, false)).toThrow(/frontmatter/);
+  it("accepts markdown wrapped in a code fence with leading prose", () => {
+    const memo = parseMemo(makeRaw({
+      prefix: "好的，下面是本章 memo：\n\n",
+      fenced: true,
+      threadRefs: ["H03"],
+    }), 12, true);
+    expect(memo.chapter).toBe(12);
+    expect(memo.isGoldenOpening).toBe(true);
+    expect(memo.threadRefs).toEqual(["H03"]);
   });
 
   it("throws when goal exceeds 50 chars", () => {
@@ -96,11 +97,8 @@ describe("parseMemo", () => {
     expect(() => parseMemo(makeRaw({ goal: longGoal }), 12, false)).toThrow(/goal too long/);
   });
 
-  it("throws when chapter mismatches expected", () => {
-    expect(() => parseMemo(makeRaw({ chapter: 99 }), 12, false)).toThrow(/chapter mismatch/);
-  });
-
   it.each([
+    "## 本章目标",
     "## 当前任务",
     "## 读者此刻在等什么",
     "## 该兑现的 / 暂不掀的",
@@ -110,8 +108,8 @@ describe("parseMemo", () => {
     "## 本章 hook 账",
     "## 不要做",
   ])("throws when body is missing section %s", (heading) => {
-    const body = SECTIONS.replace(heading, "## SECTION-REMOVED");
-    expect(() => parseMemo(makeRaw({ body }), 12, false)).toThrow(/missing sections/);
+    const raw = makeRaw().replace(heading, "## SECTION-REMOVED");
+    expect(() => parseMemo(raw, 12, false)).toThrow(/missing sections|goal/);
   });
 
   it("silently coerces non-array threadRefs to empty array", () => {
@@ -120,31 +118,10 @@ describe("parseMemo", () => {
     expect(memo.threadRefs).toEqual([]);
   });
 
-  it("uses caller-provided isGoldenOpening, not LLM frontmatter value", () => {
-    // LLM claims true but caller says false — caller wins
-    const raw = makeRaw({ isGoldenOpening: true });
-    const memo = parseMemo(raw, 12, false);
-    expect(memo.isGoldenOpening).toBe(false);
-
-    // LLM claims false but caller says true — caller wins
-    const raw2 = makeRaw({ isGoldenOpening: false });
-    const memo2 = parseMemo(raw2, 12, true);
-    expect(memo2.isGoldenOpening).toBe(true);
-  });
-
-  it("throws when YAML frontmatter is not an object", () => {
-    const raw = `---\n- just\n- a\n- list\n---\n${SECTIONS}\n`;
-    expect(() => parseMemo(raw, 12, false)).toThrow(/frontmatter is not an object/);
-  });
-
-  it("throws when chapter is not an integer", () => {
-    const raw = `---\nchapter: 12.5\ngoal: x\nisGoldenOpening: false\nthreadRefs: []\n---\n${SECTIONS}\n`;
-    expect(() => parseMemo(raw, 12, false)).toThrow(/chapter must be an integer/);
-  });
-
-  it("throws on invalid YAML", () => {
-    const raw = `---\nchapter: 12\n  bad indent: : :\n---\n${SECTIONS}\n`;
-    expect(() => parseMemo(raw, 12, false)).toThrow(/invalid YAML/);
+  it("uses caller-provided chapter and isGoldenOpening", () => {
+    const memo = parseMemo(makeRaw(), 99, true);
+    expect(memo.chapter).toBe(99);
+    expect(memo.isGoldenOpening).toBe(true);
   });
 
   // Phase hotfix 7: empty / blank section payloads must be rejected.

@@ -60,8 +60,8 @@ const MEMO_RETRY_LIMIT = 3;
  * Produces:
  *   - a simplified ChapterIntent (goal + outline + keep/avoid/style) —
  *     still deterministic, used for retrieval hints and the intent markdown.
- *   - a full ChapterMemo (YAML frontmatter + 7-section markdown body) via
- *     LLM call + strict parser.
+ *   - a full ChapterMemo (plain markdown sections) via LLM call + strict
+ *     parser.
  *
  * Retry policy: up to 3 attempts. Each failed parse appends an error
  * feedback block to the user message and re-invokes the LLM. On the third
