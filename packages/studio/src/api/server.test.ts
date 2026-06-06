@@ -2652,6 +2652,27 @@ describe("createStudioServer daemon lifecycle", () => {
       response: expect.stringContaining("Interactive world"),
       session: { sessionId: "play-session-1", sessionKind: "play" },
     });
+    expect(appendManualSessionMessagesMock).toHaveBeenCalledWith(
+      root,
+      "play-session-1",
+      expect.any(Array),
+      "确认启动旧档案馆之夜。",
+      expect.objectContaining({
+        sessionKind: "play",
+        legacyDisplay: {
+          toolExecutions: [
+            expect.objectContaining({
+              tool: "play_start",
+              status: "completed",
+              details: expect.objectContaining({
+                kind: "play_world_started",
+                suggestedActions: expect.arrayContaining(["把箱子拖进值班室"]),
+              }),
+            }),
+          ],
+        },
+      }),
+    );
     const world = JSON.parse(await readFile(join(root, "worlds", "play-session-1", "world.json"), "utf-8")) as { title: string; mode: string };
     expect(world).toMatchObject({ title: "旧档案馆之夜", mode: "open" });
   });
@@ -2688,7 +2709,19 @@ describe("createStudioServer daemon lifecycle", () => {
       "agent-session-1",
       expect.any(Array),
       "继续",
-      { sessionKind: "book" },
+      expect.objectContaining({
+        sessionKind: "book",
+        legacyDisplay: {
+          toolExecutions: [
+            expect.objectContaining({
+              tool: "sub_agent",
+              agent: "writer",
+              status: "completed",
+              details: expect.objectContaining({ kind: "chapter_written", bookId: "demo-book" }),
+            }),
+          ],
+        },
+      }),
     );
   });
 

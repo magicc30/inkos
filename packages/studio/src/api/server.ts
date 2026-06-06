@@ -606,6 +606,58 @@ interface CollectedToolExec {
   completedAt?: number;
 }
 
+class ConfirmedActionExecutionError extends Error {
+  readonly exec: CollectedToolExec;
+
+  constructor(message: string, exec: CollectedToolExec, cause?: unknown) {
+    super(message);
+    this.name = "ConfirmedActionExecutionError";
+    this.exec = exec;
+    if (cause !== undefined) {
+      (this as { cause?: unknown }).cause = cause;
+    }
+  }
+}
+
+function suppressManualTextForTool(exec: CollectedToolExec): boolean {
+  return exec.tool === "play_start" || exec.tool === "play_step";
+}
+
+function manualToolAssistantMessage(
+  responseText: string,
+  exec: CollectedToolExec,
+  provider: string,
+  model: string,
+): any {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: suppressManualTextForTool(exec) ? "" : responseText }],
+    api: "anthropic-messages",
+    provider,
+    model,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "toolUse",
+    timestamp: Date.now(),
+  };
+}
+
+function manualToolAppendOptions(sessionKind: SessionKind, exec: CollectedToolExec): {
+  readonly sessionKind: SessionKind;
+  readonly legacyDisplay: { readonly toolExecutions: readonly CollectedToolExec[] };
+} {
+  return {
+    sessionKind,
+    legacyDisplay: { toolExecutions: [exec] },
+  };
+}
+
 function isConfirmedProductionAction(args: {
   readonly actionSource: ActionSource;
   readonly requestedIntent?: RequestedIntent;
@@ -764,7 +816,7 @@ async function executeConfirmedProductionAction(args: {
       result,
       isError: true,
     });
-    throw error;
+    throw new ConfirmedActionExecutionError(message, exec, error);
   }
 }
 
@@ -3327,23 +3379,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
           }
 
           const responseText = exec.result ?? "已完成。";
-          await appendManualSessionMessages(root, bookSession.sessionId, [{
-            role: "assistant",
-            content: [{ type: "text", text: responseText }],
-            api: "anthropic-messages",
-            provider: configuredEntry?.service ?? reqService ?? config.llm.provider,
-            model: reqModel ?? config.llm.model,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "toolUse",
-            timestamp: Date.now(),
-          }], instruction, { sessionKind });
+          await appendManualSessionMessages(root, bookSession.sessionId, [
+            manualToolAssistantMessage(
+              responseText,
+              exec,
+              configuredEntry?.service ?? reqService ?? config.llm.provider,
+              reqModel ?? config.llm.model,
+            ),
+          ], instruction, manualToolAppendOptions(sessionKind, exec));
           await refreshBookSessionFromTranscript();
           broadcast("agent:complete", { instruction, activeBookId: createdBookId ?? agentBookId, sessionId: bookSession.sessionId, sessionKind });
           return c.json({
@@ -3359,6 +3402,17 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
           if (pendingBookId) {
             bookCreateStatus.set(pendingBookId, { status: "error", error: message });
             broadcast("book:error", { bookId: pendingBookId, sessionId: streamSessionId, error: message });
+          }
+          if (error instanceof ConfirmedActionExecutionError) {
+            await appendManualSessionMessages(root, bookSession.sessionId, [
+              manualToolAssistantMessage(
+                message,
+                error.exec,
+                configuredEntry?.service ?? reqService ?? config.llm.provider,
+                reqModel ?? config.llm.model,
+              ),
+            ], instruction, manualToolAppendOptions(sessionKind, error.exec)).catch(() => undefined);
+            await refreshBookSessionFromTranscript().catch(() => undefined);
           }
           broadcast("agent:error", { instruction, activeBookId: agentBookId, sessionId: bookSession.sessionId, sessionKind, error: message });
           return c.json({
@@ -3409,23 +3463,26 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
             details: toolResult.details,
             isError: false,
           });
-          await appendManualSessionMessages(root, bookSession.sessionId, [{
-            role: "assistant",
-            content: [{ type: "text", text: responseText }],
-            api: "anthropic-messages",
-            provider: configuredEntry?.service ?? reqService ?? config.llm.provider,
-            model: reqModel ?? config.llm.model,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "toolUse",
-            timestamp: Date.now(),
-          }], instruction, { sessionKind });
+          const exec: CollectedToolExec = {
+            id: toolCallId,
+            tool: "sub_agent",
+            agent: "writer",
+            label: resolveToolLabel("sub_agent", "writer"),
+            status: "completed",
+            args: toolArgs,
+            result: responseText,
+            details: toolResult.details,
+            startedAt: Date.now(),
+            completedAt: Date.now(),
+          };
+          await appendManualSessionMessages(root, bookSession.sessionId, [
+            manualToolAssistantMessage(
+              responseText,
+              exec,
+              configuredEntry?.service ?? reqService ?? config.llm.provider,
+              reqModel ?? config.llm.model,
+            ),
+          ], instruction, manualToolAppendOptions(sessionKind, exec));
           await refreshBookSessionFromTranscript();
           broadcast("agent:complete", { instruction, activeBookId: directWriteBookId, sessionId: bookSession.sessionId, sessionKind });
           return c.json({
@@ -3439,6 +3496,17 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           const toolResult = { content: [{ type: "text", text: message }] };
+          const exec: CollectedToolExec = {
+            id: toolCallId,
+            tool: "sub_agent",
+            agent: "writer",
+            label: resolveToolLabel("sub_agent", "writer"),
+            status: "error",
+            args: toolArgs,
+            error: message,
+            startedAt: Date.now(),
+            completedAt: Date.now(),
+          };
           broadcast("tool:end", {
             sessionId: streamSessionId,
             id: toolCallId,
@@ -3446,6 +3514,15 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
             result: toolResult,
             isError: true,
           });
+          await appendManualSessionMessages(root, bookSession.sessionId, [
+            manualToolAssistantMessage(
+              message,
+              exec,
+              configuredEntry?.service ?? reqService ?? config.llm.provider,
+              reqModel ?? config.llm.model,
+            ),
+          ], instruction, manualToolAppendOptions(sessionKind, exec)).catch(() => undefined);
+          await refreshBookSessionFromTranscript().catch(() => undefined);
           broadcast("agent:error", { instruction, activeBookId: agentBookId, sessionId: bookSession.sessionId, sessionKind, error: message });
           return c.json({
             error: { code: "AGENT_ACTION_FAILED", message },

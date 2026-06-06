@@ -569,7 +569,7 @@ function messageEventToInteractionMessage(
     const toolExecutions = restoredToolExecutions?.length
       ? restoredToolExecutions
       : event.legacyDisplay?.toolExecutions as ToolExecution[] | undefined;
-    if (!content && !thinking && toolExecutions?.length) return null;
+    if (!content && !thinking && !toolExecutions?.length) return null;
     if (!content && !toolExecutions?.length) return null;
     return {
       role: "assistant",
@@ -729,6 +729,22 @@ function messageEventsToInteractionMessages(events: MessageEvent[]): Interaction
     if (event.role === "assistant" && isObject(raw)) {
       rememberToolCalls(event, raw);
       const currentThinking = thinkingFromContent(raw.content);
+      const currentText = textFromContent(raw.content).trim();
+      const legacyToolExecutions = event.legacyDisplay?.toolExecutions as ToolExecution[] | undefined;
+      const hasLegacyDisplay = !!currentThinking || !!event.legacyDisplay?.thinking || !!legacyToolExecutions?.length;
+      if (
+        pendingToolExecutions.length > 0
+        && !hasCompletedPlayTool(pendingToolExecutions)
+        && !currentText
+        && !currentThinking
+        && !hasToolCallContent(raw)
+        && !hasLegacyDisplay
+      ) {
+        // Empty terminal assistant messages only close the model turn. Keep
+        // non-play tool results pending so they attach to the previous prose
+        // message; play results are intentionally restored as standalone cards.
+        continue;
+      }
       const message = messageEventToInteractionMessage(
         event,
         pendingToolExecutions.length > 0 ? pendingToolExecutions : undefined,
