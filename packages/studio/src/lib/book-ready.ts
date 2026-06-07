@@ -26,7 +26,7 @@ export async function waitForStudioBookReady(
 ): Promise<StudioBookDetail> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const wait = options.wait ?? defaultWait;
-  const maxAttempts = options.maxAttempts ?? 120;
+  const maxAttempts = options.maxAttempts ?? 900;
   const retryDelayMs = options.retryDelayMs ?? 1000;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {

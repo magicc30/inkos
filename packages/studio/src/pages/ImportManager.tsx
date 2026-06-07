@@ -115,9 +115,10 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
     setStatus("");
     try {
       const data = await postApi<{ bookId?: string }>("/spinoff/init", { title: spTitle, parentBookId: spParent, direction: spDirection || undefined });
-      setStatus(`${t("import.spinoffDone")}: ${data.bookId}`);
       if (data.bookId) {
+        setStatus(`${t("import.creating")}: ${data.bookId}`);
         await waitForStudioBookReady(data.bookId);
+        setStatus(`${t("import.spinoffDone")}: ${data.bookId}`);
         invalidateApiPaths(["/api/v1/books", `/api/v1/books/${data.bookId}`]);
         nav.toBook(data.bookId);
       }
@@ -133,9 +134,10 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
     setStatus("");
     try {
       const data = await postApi<{ bookId?: string }>("/imitation/init", { title: imTitle, referenceText: imRef, storyIdea: imIdea, genre: imGenre, language: imLang });
-      setStatus(`${t("import.imitationDone")}: ${data.bookId}`);
       if (data.bookId) {
+        setStatus(`${t("import.creating")}: ${data.bookId}`);
         await waitForStudioBookReady(data.bookId);
+        setStatus(`${t("import.imitationDone")}: ${data.bookId}`);
         invalidateApiPaths(["/api/v1/books", `/api/v1/books/${data.bookId}`]);
         nav.toBook(data.bookId);
       }
