@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fetchJson, invalidateApiPaths, useApi, postApi } from "../hooks/use-api";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useI18n } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
-import { FileInput, BookCopy, Feather, BookMarked, Wand2, Upload } from "lucide-react";
+import { FileInput, BookCopy, Feather, BookMarked, Wand2, Upload, RefreshCw } from "lucide-react";
 import { waitForStudioBookReady } from "../lib/book-ready";
 
 interface BookSummary {
@@ -14,7 +14,7 @@ interface BookSummary {
 
 interface Nav { toDashboard: () => void; toBook: (bookId: string) => void }
 
-type Tab = "chapters" | "canon" | "fanfic" | "spinoff" | "imitation" | "import-text";
+type Tab = "chapters" | "canon" | "fanfic" | "spinoff" | "imitation" | "import-text" | "rewrite-style";
 
 export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: Theme; t: TFunction; initialTab?: Tab }) {
   const c = useColors(theme);
@@ -58,6 +58,24 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
   const [itSplitRegex, setItSplitRegex] = useState("");
   const [itGenre, setItGenre] = useState("other");
   const [itLang, setItLang] = useState(lang);
+  // Rewrite Style (重写文风) state
+  const [rwBookId, setRwBookId] = useState("");
+  const [rwStartFrom, setRwStartFrom] = useState("");
+  const [rwEndAt, setRwEndAt] = useState("");
+  const [itFileName, setItFileName] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setItFileName(file.name);
+    const text = await file.text();
+    setItText(text);
+    if (!itTitle.trim()) {
+      const baseName = file.name.replace(/\.(txt|md|text)$/i, "");
+      setItTitle(baseName);
+    }
+  };
 
   useEffect(() => {
     if (initialTab) {
@@ -185,13 +203,46 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
     setLoading(false);
   };
 
-  const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
-    { id: "import-text", label: t("import.importText"), icon: <Upload size={14} /> },
-    { id: "chapters", label: t("import.chapters"), icon: <FileInput size={14} /> },
-    { id: "canon", label: t("import.canon"), icon: <BookCopy size={14} /> },
-    { id: "fanfic", label: t("import.fanfic"), icon: <Feather size={14} /> },
-    { id: "spinoff", label: t("import.spinoff"), icon: <BookMarked size={14} /> },
-    { id: "imitation", label: t("import.imitation"), icon: <Wand2 size={14} /> },
+  const handleRewriteStyle = async () => {
+    if (!rwBookId) return;
+    setLoading(true);
+    setStatus("");
+    try {
+      const data = await postApi<{ ok?: boolean; rewrittenCount?: number; chapters?: Array<{ number: number; title: string; wordCount: number; ok: boolean }> }>("/books/" + rwBookId + "/rewrite-all", {
+        startFrom: rwStartFrom ? parseInt(rwStartFrom) : undefined,
+        endAt: rwEndAt ? parseInt(rwEndAt) : undefined,
+      });
+      if (data.ok) {
+        const failed = data.chapters?.filter(ch => !ch.ok).length ?? 0;
+        setStatus(`${t("import.rewriteDone")}: ${data.rewrittenCount} chapters rewritten${failed > 0 ? `, ${failed} failed` : ""}`);
+        invalidateApiPaths(["/api/v1/books", `/api/v1/books/${rwBookId}`]);
+      } else {
+        setStatus(`${t("import.rewriteDone")}: ${data.rewrittenCount ?? 0} chapters`);
+      }
+    } catch (e) {
+      setStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    setLoading(false);
+  };
+
+  const tabGroups: { label: string; tabs: { id: Tab; label: string; icon: React.ReactNode }[] }[] = [
+    {
+      label: t("import.groupBasic"),
+      tabs: [
+        { id: "import-text", label: t("import.importText"), icon: <Upload size={14} /> },
+        { id: "chapters", label: t("import.chapters"), icon: <FileInput size={14} /> },
+        { id: "canon", label: t("import.canon"), icon: <BookCopy size={14} /> },
+      ],
+    },
+    {
+      label: t("import.groupCreative"),
+      tabs: [
+        { id: "fanfic", label: t("import.fanfic"), icon: <Feather size={14} /> },
+        { id: "spinoff", label: t("import.spinoff"), icon: <BookMarked size={14} /> },
+        { id: "imitation", label: t("import.imitation"), icon: <Wand2 size={14} /> },
+        { id: "rewrite-style", label: t("import.rewriteStyle"), icon: <RefreshCw size={14} /> },
+      ],
+    },
   ];
 
   return (
@@ -208,17 +259,24 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
       </h1>
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-secondary/30 rounded-lg p-1 w-fit">
-        {tabs.map((tb) => (
-          <button
-            key={tb.id}
-            onClick={() => { setTab(tb.id); setStatus(""); }}
-            className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-all ${
-              tab === tb.id ? "bg-card shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            {tb.icon} {tb.label}
-          </button>
+      <div className="space-y-2">
+        {tabGroups.map((group) => (
+          <div key={group.label}>
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-1 ml-1">{group.label}</p>
+            <div className="flex gap-1 bg-secondary/30 rounded-lg p-1 w-fit">
+              {group.tabs.map((tb) => (
+                <button
+                  key={tb.id}
+                  onClick={() => { setTab(tb.id); setStatus(""); }}
+                  className={`px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-1.5 transition-all ${
+                    tab === tb.id ? "bg-card shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {tb.icon} {tb.label}
+                </button>
+              ))}
+            </div>
+          </div>
         ))}
       </div>
 
@@ -252,14 +310,31 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
                 className="px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm font-mono"
               />
             </div>
-            <textarea value={itText} onChange={(e) => setItText(e.target.value)} rows={14}
+            <textarea value={itText} onChange={(e) => { setItText(e.target.value); setItFileName(""); }} rows={14}
               placeholder={t("import.pasteText")}
               className="w-full px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm resize-none font-mono"
             />
-            <button onClick={handleImportText} disabled={loading || !itTitle.trim() || !itText.trim()}
-              className={`px-4 py-2 text-sm rounded-lg ${c.btnPrimary} disabled:opacity-30`}>
-              {loading ? t("import.creating") : t("import.importText")}
-            </button>
+            <input
+              ref={fileInputRef} type="file" accept=".txt,.md,.text" className="hidden"
+              onChange={handleFileSelect}
+            />
+            <div className="flex items-center gap-3">
+              <button onClick={() => fileInputRef.current?.click()}
+                className="px-4 py-2 text-sm rounded-lg border border-border hover:bg-secondary/30 flex items-center gap-2">
+                <Upload size={14} />
+                {itFileName ? itFileName : t("import.selectFile")}
+              </button>
+              {itFileName && (
+                <button onClick={() => { setItText(""); setItFileName(""); if (fileInputRef.current) fileInputRef.current.value = ""; }}
+                  className="text-xs text-muted-foreground hover:text-destructive underline">
+                  {t("import.clearFile")}
+                </button>
+              )}
+              <button onClick={handleImportText} disabled={loading || !itTitle.trim() || !itText.trim()}
+                className={`px-4 py-2 text-sm rounded-lg ${c.btnPrimary} disabled:opacity-30`}>
+                {loading ? t("import.creating") : t("import.importText")}
+              </button>
+            </div>
           </>
         )}
 
@@ -402,6 +477,32 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
           </>
         )}
 
+
+        {tab === "rewrite-style" && (
+          <>
+            <p className="text-xs text-muted-foreground">{t("import.rewriteStyleHint")}</p>
+            <select value={rwBookId} onChange={(e) => setRwBookId(e.target.value)}
+              className="w-full px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm">
+              <option value="">{t("import.selectBook")}</option>
+              {booksData?.books.map((b) => <option key={b.id} value={b.id}>{b.title}</option>)}
+            </select>
+            <div className="grid grid-cols-2 gap-3">
+              <input type="number" value={rwStartFrom} onChange={(e) => setRwStartFrom(e.target.value)}
+                placeholder={t("import.rewriteFrom")} min="1"
+                className="px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm"
+              />
+              <input type="number" value={rwEndAt} onChange={(e) => setRwEndAt(e.target.value)}
+                placeholder={t("import.rewriteTo")} min="1"
+                className="px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm"
+              />
+            </div>
+            <button onClick={handleRewriteStyle} disabled={loading || !rwBookId}
+              className={`px-4 py-2 text-sm rounded-lg ${c.btnPrimary} disabled:opacity-30 flex items-center gap-2`}>
+              <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+              {loading ? t("import.rewriting") : t("import.rewriteStyle")}
+            </button>
+          </>
+        )}
         {status && (
           <div className={`text-sm px-3 py-2 rounded-lg ${status.startsWith("Error") ? "bg-destructive/10 text-destructive" : "bg-emerald-500/10 text-emerald-600"}`}>
             {status}

@@ -4544,6 +4544,35 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     }
   });
 
+  // --- Rewrite All Chapters (style change) ---
+
+  app.post("/api/v1/books/:id/rewrite-all", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{ startFrom?: number; endAt?: number }>().catch(() => ({}));
+
+    broadcast("rewrite-all:start", { bookId: id });
+    try {
+      const pipelineConfig = await buildPipelineConfig();
+      const pipeline = new PipelineRunner(pipelineConfig);
+      const result = await pipeline.rewriteAllChapters({
+        bookId: id,
+        startFrom: body.startFrom,
+        endAt: body.endAt,
+      });
+
+      broadcast("rewrite-all:complete", { bookId: id, rewrittenCount: result.rewrittenCount });
+      return c.json({
+        ok: true,
+        bookId: result.bookId,
+        rewrittenCount: result.rewrittenCount,
+        chapters: result.chapters,
+      });
+    } catch (e) {
+      broadcast("rewrite-all:error", { bookId: id, error: String(e) });
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
   // --- Fanfic Init ---
 
   app.post("/api/v1/fanfic/init", async (c) => {

@@ -187,6 +187,17 @@ const strings = {
   "import.importTextTitle": { zh: "书名", en: "Book title" },
   "import.pasteText": { zh: "粘贴章节文本（支持\"第X章\"、\"第X回\"、\"Chapter X\"等格式自动分割）...", en: "Paste chapter text (auto-splits by \"第X章\", \"Chapter X\", etc.)..." },
   "import.importTextDone": { zh: "新书已创建并导入完成", en: "New book created and chapters imported" },
+  "import.selectFile": { zh: "选择文件", en: "Select file" },
+  "import.clearFile": { zh: "清除", en: "Clear" },
+  "import.rewriteStyle": { zh: "重写文风", en: "Rewrite Style" },
+  "import.rewriteStyleHint": { zh: "选择已导入的书籍，系统会按当前 style_guide.md 的文风逐章重写正文，剧情和伏笔保持不变。重写前请先修改 style_guide.md 为目标文风。", en: "Select an imported book. The system rewrites each chapter using the current style_guide.md while preserving plot and foreshadowing. Edit style_guide.md first to set the target style." },
+  "import.selectBook": { zh: "选择书籍", en: "Select book" },
+  "import.rewriteFrom": { zh: "起始章节（可选）", en: "Start chapter (optional)" },
+  "import.rewriteTo": { zh: "结束章节（可选）", en: "End chapter (optional)" },
+  "import.rewriting": { zh: "重写中...", en: "Rewriting..." },
+  "import.rewriteDone": { zh: "重写完成", en: "Rewrite complete" },
+  "import.groupBasic": { zh: "基础导入", en: "Basic Import" },
+  "import.groupCreative": { zh: "创作衍生", en: "Creative & Derivative" },
 
   // Radar
   "radar.title": { zh: "市场雷达", en: "Market Radar" },

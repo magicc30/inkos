@@ -16,7 +16,7 @@ export type HashRoute =
   | { page: "logs" }
   | { page: "genres" }
   | { page: "style" }
-  | { page: "import"; tab?: "import-text" | "chapters" | "canon" | "fanfic" | "spinoff" | "imitation" }
+  | { page: "import"; tab?: "import-text" | "chapters" | "canon" | "fanfic" | "spinoff" | "imitation" | "rewrite-style" }
   | { page: "radar" }
   | { page: "doctor" };
 
@@ -28,7 +28,7 @@ function parseHash(hash: string): HashRoute {
   if (path === "config" || path === "services") return { page: "services" };
   if (path === "settings") return { page: "project-settings" };
   if (path === "import") return { page: "import" };
-  const importMatch = path.match(/^import\/(import-text|chapters|canon|fanfic|spinoff|imitation)$/);
+  const importMatch = path.match(/^import\/(import-text|chapters|canon|fanfic|spinoff|imitation|rewrite-style)$/);
   if (importMatch) return { page: "import", tab: importMatch[1] as "import-text" | "chapters" | "canon" | "fanfic" | "spinoff" | "imitation" };
   if (path === "book/new") return { page: "book-create" };
 

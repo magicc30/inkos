@@ -368,6 +368,18 @@ export interface ImportChaptersResult {
   readonly nextChapter: number;
 }
 
+export interface RewriteAllChaptersInput {
+  readonly bookId: string;
+  readonly startFrom?: number;
+  readonly endAt?: number;
+}
+
+export interface RewriteAllChaptersResult {
+  readonly bookId: string;
+  readonly rewrittenCount: number;
+  readonly chapters: ReadonlyArray<{ readonly number: number; readonly title: string; readonly wordCount: number; readonly ok: boolean }>;
+}
+
 export interface InitBookOptions {
   readonly externalContext?: string;
   readonly authorIntent?: string;
@@ -3594,6 +3606,127 @@ ${matrix}`,
     });
   }
 
+
+  /**
+   * Rewrite all (or a range of) imported chapters using the current style_guide.md.
+   * Each chapter is passed to ReviserAgent in "rewrite" mode, which rewrites the
+   * entire chapter prose while preserving plot, characters, and foreshadowing.
+   */
+  async rewriteAllChapters(input: RewriteAllChaptersInput): Promise<RewriteAllChaptersResult> {
+    const releaseLock = await this.state.acquireBookLock(input.bookId);
+    try {
+      const book = await this.state.loadBookConfig(input.bookId);
+      const bookDir = this.state.bookDir(input.bookId);
+      const { profile: gp } = await this.loadGenreProfile(book.genre);
+      const resolvedLanguage = book.language ?? gp.language;
+      const countingMode = resolveLengthCountingMode(resolvedLanguage);
+      const log = this.config.logger?.child("rewrite");
+
+      const index = await this.state.loadChapterIndex(input.bookId);
+      if (index.length === 0) {
+        throw new Error(`No chapters found in book "${input.bookId}". Import chapters first.`);
+      }
+
+      const startFrom = input.startFrom ?? 1;
+      const endAt = input.endAt ?? index.length;
+      const targets = index.filter((ch) => ch.number >= startFrom && ch.number <= endAt);
+
+      if (targets.length === 0) {
+        throw new Error(`No chapters in range ${startFrom}-${endAt}.`);
+      }
+
+      log?.info(this.localize(resolvedLanguage, {
+        zh: `开始重写 ${targets.length} 章（第 ${startFrom}-${endAt} 章）...`,
+        en: `Rewriting ${targets.length} chapters (ch ${startFrom}-${endAt})...`,
+      }));
+
+      const reviser = new ReviserAgent(this.agentCtxFor("reviser", input.bookId));
+      const results: Array<{ number: number; title: string; wordCount: number; ok: boolean }> = [];
+      let rewrittenCount = 0;
+
+      for (const chMeta of targets) {
+        const chNum = chMeta.number;
+        log?.info(this.localize(resolvedLanguage, {
+          zh: `重写第 ${chNum}/${endAt} 章：${chMeta.title}...`,
+          en: `Rewriting chapter ${chNum}/${endAt}: ${chMeta.title}...`,
+        }));
+
+        try {
+          const content = await this.readChapterContent(bookDir, chNum);
+          const lengthSpec = buildLengthSpec(
+            chMeta.wordCount || book.chapterWordCount,
+            resolvedLanguage === "en" ? "en" : "zh",
+          );
+
+          const reviseOutput = await reviser.reviseChapter(
+            bookDir,
+            content,
+            chNum,
+            [{ severity: "critical", category: "style", description: "Rewrite entire chapter in new style per style_guide.md", suggestion: "Rewrite the full chapter", fix: "" }],
+            "rewrite",
+            book.genre,
+            { lengthSpec },
+          );
+
+          if (reviseOutput.revisedContent.length > 0) {
+            const writer = new WriterAgent(this.agentCtxFor("writer", input.bookId));
+            const wordCount = countChapterLength(reviseOutput.revisedContent, countingMode);
+            const persistedOutput: WriteChapterOutput = {
+              ...reviseOutput,
+              content: reviseOutput.revisedContent,
+              wordCount,
+              postWriteErrors: [],
+              postWriteWarnings: [],
+            };
+
+            await writer.saveChapter(bookDir, persistedOutput, gp.numericalSystem, resolvedLanguage);
+            await writer.saveNewTruthFiles(bookDir, {
+              ...reviseOutput,
+              postWriteErrors: [],
+              postWriteWarnings: [],
+            }, resolvedLanguage);
+            await this.syncLegacyStructuredStateFromMarkdown(bookDir, chNum, reviseOutput);
+            await this.syncNarrativeMemoryIndex(input.bookId);
+
+            // Update chapter index
+            const currentIndex = await this.state.loadChapterIndex(input.bookId);
+            const now = new Date().toISOString();
+            const updatedIndex = currentIndex.map((e) =>
+              e.number === chNum
+                ? { ...e, wordCount, updatedAt: now, status: "rewritten" as const, auditIssues: [], lengthWarnings: [] }
+                : e,
+            );
+            await this.state.saveChapterIndex(input.bookId, updatedIndex);
+            await this.state.snapshotState(input.bookId, chNum);
+
+            results.push({ number: chNum, title: chMeta.title, wordCount, ok: true });
+            rewrittenCount++;
+          } else {
+            results.push({ number: chNum, title: chMeta.title, wordCount: chMeta.wordCount, ok: false });
+          }
+        } catch (e) {
+          log?.warn(this.localize(resolvedLanguage, {
+            zh: `第 ${chNum} 章重写失败：${String(e)}`,
+            en: `Chapter ${chNum} rewrite failed: ${String(e)}`,
+          }));
+          results.push({ number: chNum, title: chMeta.title, wordCount: chMeta.wordCount, ok: false });
+        }
+      }
+
+      log?.info(this.localize(resolvedLanguage, {
+        zh: `重写完成。成功 ${rewrittenCount}/${targets.length} 章。`,
+        en: `Rewrite complete. ${rewrittenCount}/${targets.length} chapters rewritten.`,
+      }));
+
+      return {
+        bookId: input.bookId,
+        rewrittenCount,
+        chapters: results,
+      };
+    } finally {
+      await releaseLock();
+    }
+  }
   private async readChapterContent(bookDir: string, chapterNumber: number): Promise<string> {
     const chaptersDir = join(bookDir, "chapters");
     const files = await readdir(chaptersDir);
