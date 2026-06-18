@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git pull *)",
+      "Bash(pnpm --filter @actalk/inkos-core build)",
+      "Bash(pnpm vite *)",
+      "Bash(INKOS_STUDIO_PORT=4569 INKOS_PROJECT_ROOT=../.. pnpm tsx watch --clear-screen=false src/api/index.ts)"
+    ]
+  }
+}

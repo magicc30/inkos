@@ -182,6 +182,11 @@ const strings = {
   "import.imitationIdea": { zh: "你的原创故事梗概（写什么）...", en: "Your original story idea (what it's about)..." },
   "import.imitationRef": { zh: "粘贴参考作品文本（仿其文风，不抄其情节）...", en: "Paste reference text to imitate its style (not its plot)..." },
   "import.imitationDone": { zh: "仿写新书已创建", en: "Imitation book created" },
+  "import.importText": { zh: "导入建书", en: "Import & Create" },
+  "import.importTextHint": { zh: "粘贴已有章节文本，系统自动创建新书、分割章节并分析导入，之后可直接续写。", en: "Paste existing chapter text; a new book is created, chapters are split and analyzed, then you can continue writing." },
+  "import.importTextTitle": { zh: "书名", en: "Book title" },
+  "import.pasteText": { zh: "粘贴章节文本（支持\"第X章\"、\"第X回\"、\"Chapter X\"等格式自动分割）...", en: "Paste chapter text (auto-splits by \"第X章\", \"Chapter X\", etc.)..." },
+  "import.importTextDone": { zh: "新书已创建并导入完成", en: "New book created and chapters imported" },
 
   // Radar
   "radar.title": { zh: "市场雷达", en: "Market Radar" },

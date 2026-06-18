@@ -9,5 +9,25 @@
     },
     "maxConcurrentBooks": 3
   },
-  "language": "zh"
+  "language": "zh",
+  "llm": {
+    "services": [
+      {
+        "service": "custom",
+        "name": "9router",
+        "baseUrl": "http://localhost:20128/v1",
+        "temperature": 0.7,
+        "apiFormat": "chat",
+        "stream": true
+      }
+    ],
+    "defaultModel": "free",
+    "service": "custom:9router",
+    "provider": "openai",
+    "baseUrl": "http://localhost:20128/v1",
+    "model": "free",
+    "temperature": 0.7,
+    "apiFormat": "chat",
+    "stream": true
+  }
 }

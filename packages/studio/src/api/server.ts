@@ -4492,6 +4492,58 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     }
   });
 
+  // --- Import Text → Create New Book + Import Chapters ---
+
+  app.post("/api/v1/books/import-text", async (c) => {
+    const body = await c.req.json<{
+      title: string; text: string; splitRegex?: string;
+      genre?: string; language?: string; platform?: string;
+      targetChapters?: number; chapterWordCount?: number;
+    }>();
+    if (!body.title?.trim() || !body.text?.trim()) {
+      return c.json({ error: "title and text are required" }, 400);
+    }
+
+    const bookId = body.title.toLowerCase().replace(/[^a-z0-9一-鿿]/g, "-").replace(/-+/g, "-").slice(0, 30);
+    const now = new Date().toISOString();
+
+    const bookConfig = buildStudioBookConfig({
+      title: body.title,
+      genre: body.genre ?? "other",
+      language: body.language,
+      platform: body.platform,
+      targetChapters: body.targetChapters,
+      chapterWordCount: body.chapterWordCount,
+    }, now);
+
+    broadcast("import-text:start", { bookId, title: body.title });
+    try {
+      const pipelineConfig = await buildPipelineConfig();
+      const pipeline = new PipelineRunner(pipelineConfig);
+
+      // Step 1: Create book structure
+      await pipeline.initBook(bookConfig);
+
+      // Step 2: Split text into chapters
+      const { splitChapters } = await import("@actalk/inkos-core");
+      const chapters = [...splitChapters(body.text, body.splitRegex)];
+      if (chapters.length === 0) {
+        throw new Error(
+          "No chapters found in text. Default pattern matches \"第X章\" and \"Chapter X\". Use splitRegex to provide a custom regex."
+        );
+      }
+
+      // Step 3: Import and analyze chapters
+      const result = await pipeline.importChapters({ bookId, chapters });
+
+      broadcast("import-text:complete", { bookId, count: result.importedCount });
+      return c.json({ ok: true, bookId, importedCount: result.importedCount, totalWords: result.totalWords, nextChapter: result.nextChapter });
+    } catch (e) {
+      broadcast("import-text:error", { bookId, error: String(e) });
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
   // --- Fanfic Init ---
 
   app.post("/api/v1/fanfic/init", async (c) => {
