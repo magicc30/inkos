@@ -1,4 +1,4 @@
-import { z } from "zod";
+﻿import { z } from "zod";
 import { LengthTelemetrySchema } from "./length-governance.js";
 
 export const ChapterStatusSchema = z.enum([
@@ -10,6 +10,7 @@ export const ChapterStatusSchema = z.enum([
   "audit-failed",
   "state-degraded",
   "revising",
+  "rewritten",
   "ready-for-review",
   "approved",
   "rejected",

@@ -1,4 +1,4 @@
-import type { LLMClient, OnStreamProgress } from "../llm/provider.js";
+﻿import type { LLMClient, OnStreamProgress } from "../llm/provider.js";
 import { chatCompletion, createLLMClient } from "../llm/provider.js";
 import type { Logger } from "../utils/logger.js";
 import type { BookConfig, FanficMode } from "../models/book.js";
@@ -3662,7 +3662,7 @@ ${matrix}`,
             bookDir,
             content,
             chNum,
-            [{ severity: "critical", category: "style", description: "Rewrite entire chapter in new style per style_guide.md", suggestion: "Rewrite the full chapter", fix: "" }],
+            [{ severity: "critical", category: "style", description: "Rewrite entire chapter in new style per style_guide.md", suggestion: "Rewrite the full chapter" }],
             "rewrite",
             book.genre,
             { lengthSpec },
@@ -3672,20 +3672,27 @@ ${matrix}`,
             const writer = new WriterAgent(this.agentCtxFor("writer", input.bookId));
             const wordCount = countChapterLength(reviseOutput.revisedContent, countingMode);
             const persistedOutput: WriteChapterOutput = {
-              ...reviseOutput,
+              chapterNumber: chNum,
+              title: chMeta.title,
               content: reviseOutput.revisedContent,
               wordCount,
+              preWriteCheck: "",
+              postSettlement: "",
+              updatedState: reviseOutput.updatedState,
+              updatedLedger: reviseOutput.updatedLedger,
+              updatedHooks: reviseOutput.updatedHooks,
+              chapterSummary: "",
+              updatedSubplots: "",
+              updatedEmotionalArcs: "",
+              updatedCharacterMatrix: "",
               postWriteErrors: [],
               postWriteWarnings: [],
+              tokenUsage: reviseOutput.tokenUsage,
             };
 
             await writer.saveChapter(bookDir, persistedOutput, gp.numericalSystem, resolvedLanguage);
-            await writer.saveNewTruthFiles(bookDir, {
-              ...reviseOutput,
-              postWriteErrors: [],
-              postWriteWarnings: [],
-            }, resolvedLanguage);
-            await this.syncLegacyStructuredStateFromMarkdown(bookDir, chNum, reviseOutput);
+            await writer.saveNewTruthFiles(bookDir, persistedOutput, resolvedLanguage);
+            await this.syncLegacyStructuredStateFromMarkdown(bookDir, chNum);
             await this.syncNarrativeMemoryIndex(input.bookId);
 
             // Update chapter index
