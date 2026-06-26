@@ -29,4 +29,43 @@ describe("buildPlayableHtml", () => {
     const html = buildPlayableHtml(graph, { assetDataUris: { "interactive-films/p/assets/nodes/s.png": "data:image/png;base64,AAAA" } });
     expect(html).toContain("data:image/png;base64,AAAA");
   });
+
+  // XSS: Fix 1 — title must be entity-escaped in <title> and <h1>
+  it("escapes XSS payload in graph title (Fix 1)", () => {
+    const xssGraph = StoryGraphSchema.parse({
+      schemaVersion: 1,
+      projectId: "xss-title",
+      title: '</title><script>BAD</script>',
+      nodes: [{ id: "s", type: "start", title: "start", choices: [] }],
+    });
+    const html = buildPlayableHtml(xssGraph);
+    // The raw injection string must not appear — it should be entity-escaped
+    expect(html).not.toContain('<script>BAD</script>');
+    expect(html).toContain('&lt;script&gt;BAD&lt;/script&gt;');
+  });
+
+  // XSS: Fix 2 — node content embedded in JSON is escaped by esc() so the raw onerror attribute never appears
+  it("does not embed raw onerror attribute from node content (Fix 2)", () => {
+    const xssGraph = StoryGraphSchema.parse({
+      schemaVersion: 1,
+      projectId: "xss-node",
+      title: "safe title",
+      nodes: [
+        {
+          id: "s",
+          type: "start",
+          title: '<img src=x onerror=alert(1)>',
+          sceneDesc: "safe",
+          dialogue: [{ speaker: '<b onerror=BAD>', text: 'hello' }],
+          choices: [{ id: "c1", text: '<svg onload=evil()>', targetNodeId: "e" }],
+        },
+        { id: "e", type: "ending", title: "end", choices: [] },
+      ],
+    });
+    const html = buildPlayableHtml(xssGraph);
+    // esc() turns < into < in the JSON payload, so the literal tag never appears in the static HTML
+    expect(html).not.toContain('<img src=x onerror=');
+    expect(html).not.toContain('<b onerror=');
+    expect(html).not.toContain('<svg onload=');
+  });
 });

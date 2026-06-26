@@ -2,27 +2,28 @@ import type { StoryGraph } from "./graph-schema.js";
 
 const PLAYER_JS = String.raw`
 (function(){
+  function h(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
   var vars = {};
   (GRAPH.variables||[]).forEach(function(v){ vars[v.name] = v.default; });
   var nodeById = {}; (GRAPH.nodes||[]).forEach(function(n){ nodeById[n.id] = n; });
   var endingByNode = {}; (GRAPH.endings||[]).forEach(function(e){ endingByNode[e.nodeId] = e; });
   function evalCond(c){ if(!c) return true; var v = vars[c.var];
-    switch(c.op){ case ">=": return v>=c.value; case "<=": return v<=c.value; case ">": return v>c.value; case "<": return v<c.value; case "==": return v==c.value; case "!=": return v!=c.value; } return true; }
+    switch(c.op){ case ">=": return v>=c.value; case "<=": return v<=c.value; case ">": return v>c.value; case "<": return v<c.value; case "==": return v===c.value; case "!=": return v!==c.value; } return true; }
   function applyEffects(effects){ (effects||[]).forEach(function(e){
     if(e.op==="add") vars[e.var]=(vars[e.var]||0)+e.value; else if(e.op==="sub") vars[e.var]=(vars[e.var]||0)-e.value; else vars[e.var]=e.value; }); }
   function visible(node){ return (node.choices||[]).filter(function(c){ return evalCond(c.condition); }); }
   var root = document.getElementById("if-player");
-  function hud(){ var s = Object.keys(vars).map(function(k){ return k+": "+vars[k]; }).join("  ·  "); return s ? '<div class="hud">'+s+'</div>' : ''; }
+  function hud(){ var s = Object.keys(vars).map(function(k){ return h(k)+": "+h(String(vars[k])); }).join("  ·  "); return s ? '<div class="hud">'+s+'</div>' : ''; }
   function render(node){
     if(!node){ root.innerHTML = "<p>节点缺失</p>"; return; }
     var html = hud();
     if(node.imageSlot && node.imageSlot.assetRef && ASSETS[node.imageSlot.assetRef]) html += '<img class="scene" src="'+ASSETS[node.imageSlot.assetRef]+'" alt=""/>';
-    if(node.title) html += '<h2>'+node.title+'</h2>';
-    if(node.sceneDesc) html += '<p class="scene-desc">'+node.sceneDesc+'</p>';
-    (node.dialogue||[]).forEach(function(d){ html += '<p class="line"><b>'+d.speaker+'：</b>'+d.text+'</p>'; });
+    if(node.title) html += '<h2>'+h(node.title)+'</h2>';
+    if(node.sceneDesc) html += '<p class="scene-desc">'+h(node.sceneDesc)+'</p>';
+    (node.dialogue||[]).forEach(function(d){ html += '<p class="line"><b>'+h(d.speaker)+'：</b>'+h(d.text)+'</p>'; });
     var end = endingByNode[node.id] || node.type==="ending";
     if(end){ var e = endingByNode[node.id];
-      html += '<div class="ending"><div class="ending-type">'+(e?e.type:"ending")+'</div><div class="ending-title">'+(e?e.title:(node.title||"结局"))+'</div></div>';
+      html += '<div class="ending"><div class="ending-type">'+h(e?e.type:"ending")+'</div><div class="ending-title">'+h(e?e.title:(node.title||"结局"))+'</div></div>';
       html += '<button class="restart">重新开始</button>';
       root.innerHTML = html;
       root.querySelector(".restart").onclick = function(){ start(); };
@@ -30,7 +31,7 @@ const PLAYER_JS = String.raw`
     }
     var vis = visible(node);
     html += '<div class="choices">';
-    vis.forEach(function(c,i){ html += '<button class="choice" data-i="'+i+'">'+c.text+'</button>'; });
+    vis.forEach(function(c,i){ html += '<button class="choice" data-i="'+i+'">'+h(c.text)+'</button>'; });
     html += '</div>';
     if(vis.length===0) html += '<p class="deadend">（没有可走的选项）</p>';
     root.innerHTML = html;
@@ -65,6 +66,15 @@ function esc(s: string): string {
   return s.replace(/</g, "\\u003c");
 }
 
+// Escape user-controlled strings before interpolating into the HTML template itself (title, h1).
+function escHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 export function buildPlayableHtml(
   graph: StoryGraph,
   opts?: { assetDataUris?: Record<string, string>; title?: string },
@@ -74,8 +84,8 @@ export function buildPlayableHtml(
   const assetsJson = esc(JSON.stringify(opts?.assetDataUris ?? {}));
   return `<!doctype html>
 <html lang="zh"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>${title}</title><style>${CSS}</style></head>
-<body><div id="wrap"><h1>${title}</h1><div id="if-player" data-if-player></div></div>
+<title>${escHtml(title)}</title><style>${CSS}</style></head>
+<body><div id="wrap"><h1>${escHtml(title)}</h1><div id="if-player" data-if-player></div></div>
 <script>var GRAPH=${graphJson};var ASSETS=${assetsJson};</script>
 <script>${PLAYER_JS}</script>
 </body></html>`;
