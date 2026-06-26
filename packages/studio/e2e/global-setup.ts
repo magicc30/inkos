@@ -16,9 +16,13 @@ import path from "path";
  */
 export default function globalSetup(): void {
   const thisFile = fileURLToPath(import.meta.url);
-  const repoRoot = path.resolve(path.dirname(thisFile), "../../../../");
+  // From packages/studio/e2e: ../ = studio, ../../ = packages, ../../../ = the
+  // worktree/workspace root (where pnpm-workspace.yaml lives). A fourth ../ would
+  // point at the .worktrees parent, where the --filter matches nothing and the
+  // build silently no-ops, leaving core dist stale (agent stub absent at runtime).
+  const workspaceRoot = path.resolve(path.dirname(thisFile), "../../../");
   execSync("pnpm --filter @actalk/inkos-core build", {
-    cwd: repoRoot,
+    cwd: workspaceRoot,
     stdio: "inherit",
   });
 }
