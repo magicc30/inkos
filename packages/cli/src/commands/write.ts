@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { PipelineRunner, StateManager } from "@actalk/inkos-core";
+import { PipelineRunner, StateManager, resolveChapterReviewMode } from "@actalk/inkos-core";
 import { readdir, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -33,7 +33,11 @@ writeCommand
       }
       const config = await loadConfig();
 
-      const pipeline = new PipelineRunner(buildPipelineConfig(config, root, { externalContext: context, quiet: opts.quiet }));
+      const pipeline = new PipelineRunner(buildPipelineConfig(config, root, {
+        externalContext: context,
+        quiet: opts.quiet,
+        chapterReviewMode: resolveChapterReviewMode(book, config.writing),
+      }));
 
       const count = parseInt(opts.count, 10);
       const wordCount = opts.words ? parseInt(opts.words, 10) : undefined;
@@ -124,6 +128,7 @@ writeCommand
       }
 
       const state = new StateManager(root);
+      const book = await state.loadBookConfig(bookId);
       const bookDir = state.bookDir(bookId);
       const chaptersDir = join(bookDir, "chapters");
       const restoreFrom = chapter - 1;
@@ -179,10 +184,10 @@ writeCommand
       const config = await loadConfig();
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root, {
         externalContext: opts.brief,
+        chapterReviewMode: resolveChapterReviewMode(book, config.writing),
       }));
 
       const result = await pipeline.writeNextChapter(bookId, wordCount);
-      const book = await state.loadBookConfig(bookId);
       const language = resolveCliLanguage(book.language);
 
       if (opts.json) {

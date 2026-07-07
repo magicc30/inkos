@@ -4,6 +4,7 @@ import { initCommand } from "./commands/init.js";
 import { configCommand } from "./commands/config.js";
 import { bookCommand } from "./commands/book.js";
 import { writeCommand } from "./commands/write.js";
+import { autoCommand } from "./commands/auto.js";
 import { reviewCommand } from "./commands/review.js";
 import { statusCommand } from "./commands/status.js";
 import { radarCommand } from "./commands/radar.js";
@@ -63,6 +64,7 @@ export function createProgram(hooks: ProgramHooks = {}): Command {
   program.addCommand(configCommand);
   program.addCommand(bookCommand);
   program.addCommand(writeCommand);
+  program.addCommand(autoCommand);
   program.addCommand(reviewCommand);
   program.addCommand(statusCommand);
   program.addCommand(radarCommand);

@@ -139,6 +139,30 @@ export function formatWriteNextComplete(language: CliLanguage): string {
   });
 }
 
+export function formatAutoWriteStart(
+  language: CliLanguage,
+  bookId: string,
+  startChapter: number,
+  targetChapter: number,
+): string {
+  return localize(language, {
+    zh: `自动写作「${bookId}」：从第${startChapter}章连续写到第${targetChapter}章...`,
+    en: `Auto-writing "${bookId}": chapter ${startChapter} through chapter ${targetChapter}...`,
+  });
+}
+
+export function formatAutoWriteAlreadyComplete(
+  language: CliLanguage,
+  bookId: string,
+  writtenChapters: number,
+  targetChapter: number,
+): string {
+  return localize(language, {
+    zh: `「${bookId}」已写到第${writtenChapters}章（目标第${targetChapter}章），无需继续。`,
+    en: `"${bookId}" already has ${writtenChapters} chapter(s) written (target: chapter ${targetChapter}). Nothing to do.`,
+  });
+}
+
 export function formatImportChaptersDiscovery(
   language: CliLanguage,
   chapterCount: number,

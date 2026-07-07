@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatAutoWriteAlreadyComplete,
+  formatAutoWriteStart,
   formatBookCreateCreating,
   formatBookCreateCreated,
   formatBookCreateNextStep,
@@ -65,6 +67,18 @@ describe("CLI localization", () => {
       "  Issues:",
       "    [critical] continuity: Mismatch",
     ]);
+  });
+
+  it("formats auto-write banners in both languages", () => {
+    expect(formatAutoWriteStart("zh", "shan-he", 3, 10))
+      .toBe("自动写作「shan-he」：从第3章连续写到第10章...");
+    expect(formatAutoWriteAlreadyComplete("zh", "shan-he", 12, 10))
+      .toBe("「shan-he」已写到第12章（目标第10章），无需继续。");
+
+    expect(formatAutoWriteStart("en", "harbor", 3, 10))
+      .toBe('Auto-writing "harbor": chapter 3 through chapter 10...');
+    expect(formatAutoWriteAlreadyComplete("en", "harbor", 12, 10))
+      .toBe('"harbor" already has 12 chapter(s) written (target: chapter 10). Nothing to do.');
   });
 
   it("formats import summaries with language-specific units and action hints", () => {
