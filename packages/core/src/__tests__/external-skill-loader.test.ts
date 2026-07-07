@@ -1,6 +1,6 @@
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { delimiter, join, relative } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createSkillRegistry,
@@ -104,7 +104,9 @@ describe("external skill loader", () => {
   });
 
   it("rejects relative external directories", async () => {
-    await expect(loadExternalCapabilitySkills({ externalDirs: [relative(process.cwd(), root)] }))
+    // 不能用 relative(process.cwd(), root)：Windows CI 上 cwd 和临时目录在不同盘符，
+    // path.relative 跨盘符会返回绝对路径，测试意图（传相对路径必须被拒绝）就失效了。
+    await expect(loadExternalCapabilitySkills({ externalDirs: [join("relative", "external-skills")] }))
       .rejects.toThrow(/absolute/);
   });
 
