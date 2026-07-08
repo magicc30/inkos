@@ -36,6 +36,7 @@ import {
   createScriptCreationTool,
   createStoryboardCreationTool,
   createInteractiveFilmCreationTool,
+  createTranslationCreateTool,
   createResearchWebTool,
   createIngestMaterialTool,
   createRetrieveMaterialTool,
@@ -770,6 +771,9 @@ function createAgentToolsForMode(params: {
   };
 
   if (params.sessionKind === "chat") {
+    if (isConfirmed("translation_create")) {
+      return [createTranslationCreateTool(params.projectRoot, { actionPayload: params.actionPayload })];
+    }
     return [proposalTool, researchTool, materialTool, materialRetrievalTool, importChaptersTool];
   }
 

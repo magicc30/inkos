@@ -101,9 +101,28 @@ const strings = {
   "nav.tools": { zh: "工具", en: "Tools" },
   "nav.history": { zh: "会话记录", en: "Sessions" },
   "nav.style": { zh: "文风", en: "Style" },
+  "nav.translation": { zh: "翻译译介", en: "Translation" },
   "nav.import": { zh: "导入", en: "Import" },
   "nav.radar": { zh: "市场雷达", en: "Radar" },
   "nav.doctor": { zh: "环境诊断", en: "Doctor" },
+
+  // Translation
+  "translation.title": { zh: "多语翻译 / 译介", en: "Multilingual Translation" },
+  "translation.subtitle": { zh: "导入 EPUB / PDF / TXT / Markdown，设置任意源语言和目标语言，分批翻译、抽取术语、生成审校报告并导出。", en: "Import EPUB / PDF / TXT / Markdown, choose any source and target languages, translate in batches, keep glossary terms, review, and export." },
+  "translation.newProject": { zh: "新建翻译项目", en: "New Translation Project" },
+  "translation.upload": { zh: "上传源文件", en: "Upload Source" },
+  "translation.source": { zh: "源语言", en: "Source" },
+  "translation.target": { zh: "目标语言", en: "Target" },
+  "translation.projectTitle": { zh: "项目标题", en: "Project Title" },
+  "translation.segmentMax": { zh: "分段最大字符数", en: "Max Segment Chars" },
+  "translation.create": { zh: "创建翻译项目", en: "Create Translation Project" },
+  "translation.projects": { zh: "翻译项目", en: "Translation Projects" },
+  "translation.refresh": { zh: "刷新", en: "Refresh" },
+  "translation.empty": { zh: "还没有翻译项目。上传一个源文件开始。", en: "No translation projects yet. Upload a source file to start." },
+  "translation.chapters": { zh: "章", en: "chapters" },
+  "translation.run": { zh: "运行翻译", en: "Run Translation" },
+  "translation.report": { zh: "审校报告", en: "Review Report" },
+  "translation.noReport": { zh: "暂无审校报告。运行翻译后会生成。", en: "No review report yet. Run translation to generate one." },
 
   // Book Detail extras
   "book.deleteBook": { zh: "删除书籍", en: "Delete Book" },

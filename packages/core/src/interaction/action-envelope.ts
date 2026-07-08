@@ -25,6 +25,7 @@ export const RequestedIntentSchema = z.enum([
   "script_create",
   "storyboard_create",
   "interactive_film_create",
+  "translation_create",
   "draft_structure",
   "connect_choice",
   "remove_node",
@@ -117,6 +118,14 @@ export const InteractiveFilmCreateActionPayloadSchema = z.object({
   outDir: z.string().min(1).optional(),
 }).strict();
 
+export const TranslationCreateActionPayloadSchema = z.object({
+  filePath: z.string().min(1).optional(),
+  sourceLanguage: z.string().min(1).optional(),
+  targetLanguage: z.string().min(1).optional(),
+  title: z.string().min(1).optional(),
+  segmentMaxChars: z.number().int().min(1).optional(),
+}).strict();
+
 export const ActionPayloadSchema = z.object({
   createBook: CreateBookActionPayloadSchema.optional(),
   shortRun: ShortRunActionPayloadSchema.optional(),
@@ -125,6 +134,7 @@ export const ActionPayloadSchema = z.object({
   scriptCreate: ScriptCreateActionPayloadSchema.optional(),
   storyboardCreate: StoryboardCreateActionPayloadSchema.optional(),
   interactiveFilmCreate: InteractiveFilmCreateActionPayloadSchema.optional(),
+  translationCreate: TranslationCreateActionPayloadSchema.optional(),
   draftStructure: z.object({
     projectId: z.string().min(1).optional(),
     instruction: z.string().default(""),

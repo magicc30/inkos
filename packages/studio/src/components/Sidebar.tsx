@@ -47,6 +47,7 @@ import {
   Clapperboard,
   Rows3,
   Film,
+  Languages,
 } from "lucide-react";
 import { InkosLogo } from "./InkosLogo";
 
@@ -82,6 +83,7 @@ interface Nav {
   toLogs: () => void;
   toGenres: () => void;
   toStyle: () => void;
+  toTranslation: () => void;
   toImport: (tab?: "chapters" | "canon" | "fanfic" | "spinoff" | "imitation") => void;
   toRadar: () => void;
   toDoctor: () => void;
@@ -607,6 +609,12 @@ export function Sidebar({ nav, activePage, sse, t }: {
               icon={<Wand2 size={16} />}
               active={activePage === "style"}
               onClick={nav.toStyle}
+            />
+            <SidebarItem
+              label={t("nav.translation")}
+              icon={<Languages size={16} />}
+              active={activePage === "translation"}
+              onClick={nav.toTranslation}
             />
             <SidebarItem
               label={t("nav.import")}

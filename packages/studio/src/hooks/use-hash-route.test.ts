@@ -51,6 +51,10 @@ describe("hash route", () => {
       expect(parseHash("#/import/fanfic")).toEqual({ page: "import", tab: "fanfic" });
     });
 
+    it("parses #/translation", () => {
+      expect(parseHash("#/translation")).toEqual({ page: "translation" });
+    });
+
     it("decodes encoded serviceId", () => {
       expect(parseHash("#/services/%E8%87%AA%E5%AE%9A%E4%B9%89")).toEqual({ page: "service-detail", serviceId: "自定义" });
     });
@@ -101,6 +105,10 @@ describe("hash route", () => {
 
     it("import tab -> #/import/{tab}", () => {
       expect(routeToHash({ page: "import", tab: "chapters" })).toBe("#/import/chapters");
+    });
+
+    it("translation -> #/translation", () => {
+      expect(routeToHash({ page: "translation" })).toBe("#/translation");
     });
 
     it("encodes Chinese serviceId", () => {

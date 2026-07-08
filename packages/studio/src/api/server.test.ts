@@ -311,6 +311,12 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     createSkillRegistry: actual.createSkillRegistry,
     loadConfiguredCapabilitySkills: actual.loadConfiguredCapabilitySkills,
     CapabilitySkillManifestSchema: actual.CapabilitySkillManifestSchema,
+    createTranslationCreateTool: actual.createTranslationCreateTool,
+    createLLMTranslationModel: actual.createLLMTranslationModel,
+    createTranslationProjectFromFile: actual.createTranslationProjectFromFile,
+    loadTranslationManifest: actual.loadTranslationManifest,
+    runTranslationProject: actual.runTranslationProject,
+    writeTranslationExport: actual.writeTranslationExport,
   };
 });
 
@@ -4519,6 +4525,51 @@ describe("createStudioServer daemon lifecycle", () => {
     await expect(ok.json()).resolves.toMatchObject({ status: "creating", bookId: "仿写新书" });
     await vi.waitFor(() => expect(initImitationBookMock).toHaveBeenCalledTimes(1));
     expect(initImitationBookMock.mock.calls[0]?.[2]).toBe("一个原创故事");
+  });
+
+  it("uploads a translation source, creates a translation project, lists it, and exports markdown", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const source = "# 第一章 雨夜\n\n雨水落在旧码头。\n";
+    const dataUrl = `data:text/markdown;base64,${Buffer.from(source, "utf-8").toString("base64")}`;
+
+    const upload = await app.request("http://localhost/api/v1/translations/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: "source.md", dataUrl }),
+    });
+    expect(upload.status).toBe(200);
+    const uploaded = await upload.json() as { storedPath: string };
+    expect(uploaded.storedPath).toMatch(/^\.inkos\/uploads\/translation\//);
+
+    const create = await app.request("http://localhost/api/v1/translations/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filePath: uploaded.storedPath,
+        sourceLanguage: "zh",
+        targetLanguage: "en",
+        title: "Rain Translation",
+      }),
+    });
+    expect(create.status).toBe(200);
+    const created = await create.json() as { projectDir: string; manifest: { id: string; chapters: unknown[] } };
+    expect(created.manifest.chapters).toHaveLength(1);
+
+    const list = await app.request("http://localhost/api/v1/translations");
+    await expect(list.json()).resolves.toMatchObject({
+      translations: [expect.objectContaining({ projectId: created.manifest.id, title: "Rain Translation" })],
+    });
+
+    const exported = await app.request(`http://localhost/api/v1/translations/${created.manifest.id}/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ format: "md" }),
+    });
+    expect(exported.status).toBe(200);
+    const exportedBody = await exported.json() as { outputPath: string; chaptersExported: number };
+    expect(exportedBody.chaptersExported).toBe(1);
+    await expect(access(exportedBody.outputPath)).resolves.toBeUndefined();
   });
 
 });

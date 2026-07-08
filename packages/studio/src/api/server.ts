@@ -86,10 +86,16 @@ import {
   createScriptCreationTool,
   createShortFictionRunTool,
   createStoryboardCreationTool,
+  createTranslationCreateTool,
   createSubAgentTool,
   createDraftStructureTool,
   createConnectChoiceTool,
   createRemoveNodeTool,
+  createLLMTranslationModel,
+  createTranslationProjectFromFile,
+  loadTranslationManifest,
+  runTranslationProject,
+  writeTranslationExport,
   filmLLMDepsFromClient,
   applyGraphDelta,
   loadStoryGraph,
@@ -188,6 +194,7 @@ const TOOL_LABELS: Record<string, BilingualLabel> = {
   script_create: { zh: "剧本创作", en: "Script creation" },
   storyboard_create: { zh: "分镜创作", en: "Storyboard creation" },
   interactive_film_create: { zh: "互动影游", en: "Interactive film" },
+  translation_create: { zh: "翻译项目", en: "Translation" },
   generate_cover: { zh: "生成封面", en: "Cover generation" },
   play_edit: { zh: "编辑互动世界", en: "Edit interactive world" },
   play_start: { zh: "启动互动世界", en: "Start interactive world" },
@@ -547,6 +554,7 @@ type StudioAgentAttachmentPayload = {
 const MAX_AGENT_ATTACHMENTS = 8;
 const MAX_AGENT_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 const MAX_AGENT_ATTACHMENT_TEXT_CHARS = 120_000;
+const MAX_TRANSLATION_UPLOAD_BYTES = 80 * 1024 * 1024;
 
 function safeUploadFileName(value: string): string {
   const trimmed = value.trim().replace(/[/\\\0]/g, "_").replace(/\s+/g, " ");
@@ -654,6 +662,30 @@ async function normalizeAgentAttachments(
     });
   }
   return out;
+}
+
+async function storeTranslationUpload(
+  root: string,
+  payload: { readonly filename?: string; readonly dataUrl?: string },
+): Promise<{ readonly storedPath: string; readonly size: number; readonly mimeType: string }> {
+  const filename = safeUploadFileName(payload.filename || "translation-source");
+  if (!payload.dataUrl) {
+    throw new ApiError(400, "INVALID_TRANSLATION_UPLOAD", "Translation upload is missing dataUrl");
+  }
+  const parsed = parseDataUrl(payload.dataUrl);
+  if (parsed.buffer.byteLength > MAX_TRANSLATION_UPLOAD_BYTES) {
+    throw new ApiError(413, "TRANSLATION_UPLOAD_TOO_LARGE", `${filename} exceeds ${MAX_TRANSLATION_UPLOAD_BYTES} bytes`);
+  }
+  const uploadDir = join(root, ".inkos", "uploads", "translation");
+  await mkdir(uploadDir, { recursive: true });
+  const storedName = `${Date.now()}-${filename}`;
+  const storedPath = join(uploadDir, storedName);
+  await writeFile(storedPath, parsed.buffer);
+  return {
+    storedPath: relative(root, storedPath),
+    size: parsed.buffer.byteLength,
+    mimeType: parsed.mimeType,
+  };
 }
 
 function projectSkillsDir(root: string): string {
@@ -1223,6 +1255,7 @@ function isConfirmedProductionAction(args: {
     || args.requestedIntent === "script_create"
     || args.requestedIntent === "storyboard_create"
     || args.requestedIntent === "interactive_film_create"
+    || args.requestedIntent === "translation_create"
     || args.requestedIntent === "play_start"
     || args.requestedIntent === "generate_cover"
     || args.requestedIntent === "draft_structure"
@@ -1265,6 +1298,7 @@ async function executeConfirmedProductionAction(args: {
     | ReturnType<typeof createScriptCreationTool>
     | ReturnType<typeof createStoryboardCreationTool>
     | ReturnType<typeof createInteractiveFilmCreationTool>
+    | ReturnType<typeof createTranslationCreateTool>
     | ReturnType<typeof createPlayStartTool>
     | ReturnType<typeof createDraftStructureTool>
     | ReturnType<typeof createConnectChoiceTool>
@@ -1365,6 +1399,19 @@ async function executeConfirmedProductionAction(args: {
       ...(payload?.projectId ? { projectId: payload.projectId } : {}),
       ...(payload?.outDir ? { outDir: payload.outDir } : {}),
     };
+  } else if (args.requestedIntent === "translation_create") {
+    const payload = actionPayload?.translationCreate;
+    const filePath = requirePayloadText(payload?.filePath, pick(lang, "确认创建翻译项目缺少文件路径，请重新生成确认卡。", "The translation confirmation is missing a file path. Regenerate the confirmation card."));
+    const sourceLanguage = requirePayloadText(payload?.sourceLanguage, pick(lang, "确认创建翻译项目缺少源语言，请重新生成确认卡。", "The translation confirmation is missing a source language. Regenerate the confirmation card."));
+    const targetLanguage = requirePayloadText(payload?.targetLanguage, pick(lang, "确认创建翻译项目缺少目标语言，请重新生成确认卡。", "The translation confirmation is missing a target language. Regenerate the confirmation card."));
+    tool = createTranslationCreateTool(args.root, { actionPayload });
+    params = {
+      filePath,
+      sourceLanguage,
+      targetLanguage,
+      ...(payload?.title ? { title: payload.title } : {}),
+      ...(payload?.segmentMaxChars ? { segmentMaxChars: payload.segmentMaxChars } : {}),
+    };
   } else if (args.requestedIntent === "play_start") {
     const payload = actionPayload?.playStart;
     const title = requirePayloadText(payload?.title, pick(lang, "确认启动互动世界缺少标题，请重新生成确认卡。", "The interactive world start confirmation is missing a title. Regenerate the confirmation card."));
@@ -1452,7 +1499,7 @@ async function executeConfirmedProductionAction(args: {
       id,
       params as never,
       undefined,
-      (partialResult) => {
+      (partialResult: unknown) => {
         broadcast("tool:update", {
           sessionId: args.streamSessionId,
           tool: tool.name,
@@ -5823,6 +5870,115 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
     films.sort((a, b) => a.title.localeCompare(b.title, "zh"));
     return c.json({ films });
+  });
+
+  app.get("/api/v1/translations", async (c) => {
+    const translationsDir = join(root, "translations");
+    let entries: string[] = [];
+    try {
+      const dirents = await readdir(translationsDir, { withFileTypes: true });
+      entries = dirents.filter((d) => d.isDirectory()).map((d) => d.name);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+    const translations: Array<{ projectId: string; title: string; sourceLanguage: string; targetLanguage: string; chapters: number }> = [];
+    for (const projectId of entries) {
+      if (!isSafeBookId(projectId)) continue;
+      try {
+        const manifest = await loadTranslationManifest(root, projectId);
+        translations.push({
+          projectId,
+          title: manifest.title,
+          sourceLanguage: manifest.sourceLanguage,
+          targetLanguage: manifest.targetLanguage,
+          chapters: manifest.chapters.length,
+        });
+      } catch {
+        // Skip dirs without a valid translation manifest.
+      }
+    }
+    translations.sort((a, b) => b.projectId.localeCompare(a.projectId));
+    return c.json({ translations });
+  });
+
+  app.post("/api/v1/translations/upload", async (c) => {
+    const body: { filename?: string; dataUrl?: string } = await c.req.json().catch(() => ({}));
+    const result = await storeTranslationUpload(root, body);
+    return c.json(result);
+  });
+
+  app.post("/api/v1/translations/create", async (c) => {
+    const body: {
+      filePath?: string;
+      sourceLanguage?: string;
+      targetLanguage?: string;
+      title?: string;
+      segmentMaxChars?: number;
+    } = await c.req.json().catch(() => ({}));
+    if (!body.filePath?.trim()) {
+      return c.json({ error: { code: "MISSING_FILE_PATH", message: "filePath is required" } }, 400);
+    }
+    if (!body.sourceLanguage?.trim() || !body.targetLanguage?.trim()) {
+      return c.json({ error: { code: "MISSING_LANGUAGES", message: "sourceLanguage and targetLanguage are required" } }, 400);
+    }
+    const result = await createTranslationProjectFromFile(root, {
+      filePath: body.filePath,
+      sourceLanguage: body.sourceLanguage,
+      targetLanguage: body.targetLanguage,
+      title: body.title,
+      segmentMaxChars: body.segmentMaxChars,
+    });
+    return c.json(result);
+  });
+
+  app.get("/api/v1/translations/:id", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) {
+      return c.json({ error: { code: "INVALID_ID", message: `invalid translation id: ${id}` } }, 400);
+    }
+    try {
+      const manifest = await loadTranslationManifest(root, id);
+      const reportPath = join(root, "translations", id, "review-report.md");
+      const report = await readFile(reportPath, "utf-8").catch(() => "");
+      return c.json({ manifest, report });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return c.json({ error: { code: "NOT_FOUND", message: `translation project not found for ${id}` } }, 404);
+      }
+      throw error;
+    }
+  });
+
+  app.post("/api/v1/translations/:id/run", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) {
+      return c.json({ error: { code: "INVALID_ID", message: `invalid translation id: ${id}` } }, 400);
+    }
+    const body: { batchSize?: number; maxTokens?: number } = await c.req.json().catch(() => ({}));
+    const currentConfig = await loadCurrentProjectConfig();
+    const model = createLLMTranslationModel({
+      client: createLLMClient(currentConfig.llm),
+      model: currentConfig.llm.model,
+      maxTokens: body.maxTokens,
+    });
+    const result = await runTranslationProject(root, id, {
+      model,
+      batchSize: body.batchSize,
+    });
+    return c.json(result);
+  });
+
+  app.post("/api/v1/translations/:id/export", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) {
+      return c.json({ error: { code: "INVALID_ID", message: `invalid translation id: ${id}` } }, 400);
+    }
+    const body: { format?: "txt" | "md" | "epub"; outputPath?: string } = await c.req.json().catch(() => ({}));
+    const result = await writeTranslationExport(root, id, {
+      format: body.format ?? "md",
+      outputPath: body.outputPath,
+    });
+    return c.json(result);
   });
 
   app.post("/api/v1/projects/:id/story-graph/delta", async (c) => {

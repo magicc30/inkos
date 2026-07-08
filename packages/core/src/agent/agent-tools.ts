@@ -15,6 +15,7 @@ import { safeChildPath } from "../utils/path-safety.js";
 import { normalizePlatformId, normalizePlatformOrOther } from "../models/book.js";
 import { generateShortFictionCover, runShortFictionProduction } from "../pipeline/short-fiction-runner.js";
 import { runInteractiveFilmCreation, runScriptCreation, runStoryboardCreation } from "../pipeline/script-storyboard-runner.js";
+import { createTranslationProjectFromFile } from "../translation/index.js";
 import { runResearchReport } from "../agents/researcher.js";
 import { ingestMaterial } from "../materials/ingest.js";
 import { retrieveMaterials } from "../materials/retrieve.js";
@@ -128,6 +129,7 @@ const ProposeActionParams = Type.Object({
     Type.Literal("script_create"),
     Type.Literal("storyboard_create"),
     Type.Literal("interactive_film_create"),
+    Type.Literal("translation_create"),
     Type.Literal("draft_structure"),
     Type.Literal("connect_choice"),
     Type.Literal("remove_node"),
@@ -259,6 +261,13 @@ const ProposeActionParams = Type.Object({
     projectId: Type.Optional(Type.String({ description: "Optional output id under interactive-films/." })),
     outDir: Type.Optional(Type.String({ description: "Optional project-relative output directory. Default interactive-films/." })),
   }, { description: "Structured execution args for action=interactive_film_create." })),
+  translationCreate: Type.Optional(Type.Object({
+    filePath: Type.Optional(Type.String({ description: "Project-relative EPUB/PDF/TXT/Markdown source file path to translate." })),
+    sourceLanguage: Type.Optional(Type.String({ description: "Source language, e.g. ja, en, zh, ko, auto." })),
+    targetLanguage: Type.Optional(Type.String({ description: "Target language, e.g. zh, en, ja." })),
+    title: Type.Optional(Type.String({ description: "Optional translation project title." })),
+    segmentMaxChars: Type.Optional(Type.Number({ description: "Optional long-paragraph split threshold." })),
+  }, { description: "Structured execution args for action=translation_create." })),
 });
 
 type ProposeActionParamsType = Static<typeof ProposeActionParams>;
@@ -273,6 +282,7 @@ function proposedActionSessionKind(action: ProposeActionParamsType["action"]): "
   if (action === "script_create") return "script";
   if (action === "storyboard_create") return "storyboard";
   if (action === "interactive_film_create") return "interactive-film";
+  if (action === "translation_create") return "chat";
   if (action === "draft_structure" || action === "connect_choice" || action === "remove_node") return "interactive-film-authoring";
   if (action === "fanfic_init" || action === "continuation_import" || action === "spinoff_create" || action === "style_imitation") return "chat";
   return "short";
@@ -310,6 +320,8 @@ function proposedActionFallbackTitle(action: ProposeActionParamsType["action"], 
       return isZh ? "创建分镜" : "Create storyboard";
     case "interactive_film_create":
       return isZh ? "创建互动影游" : "Create interactive film";
+    case "translation_create":
+      return isZh ? "创建翻译项目" : "Create translation project";
     case "draft_structure":
       return isZh ? "生成故事结构" : "Draft story structure";
     case "connect_choice":
@@ -405,6 +417,10 @@ function proposedActionPayload(params: ProposeActionParamsType): ActionPayload |
     const interactiveFilmCreate = compactObject(params.interactiveFilmCreate);
     if (interactiveFilmCreate) payload.interactiveFilmCreate = interactiveFilmCreate;
   }
+  if (params.action === "translation_create") {
+    const translationCreate = compactObject(params.translationCreate);
+    if (translationCreate) payload.translationCreate = translationCreate;
+  }
   return Object.keys(payload).length > 0 ? payload : undefined;
 }
 
@@ -448,6 +464,12 @@ function assertExecutableProposedAction(params: ProposeActionParamsType, payload
   }
   if (params.action === "interactive_film_create") {
     requireProposedText(payload?.interactiveFilmCreate?.title, "interactiveFilmCreate.title");
+    return;
+  }
+  if (params.action === "translation_create") {
+    requireProposedText(payload?.translationCreate?.filePath, "translationCreate.filePath");
+    requireProposedText(payload?.translationCreate?.sourceLanguage, "translationCreate.sourceLanguage");
+    requireProposedText(payload?.translationCreate?.targetLanguage, "translationCreate.targetLanguage");
   }
 }
 
@@ -1316,7 +1338,65 @@ function summarizeCoverGenerationError(error: string | undefined): string {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Script and Storyboard tools
+// 3. Translation tool
+// ---------------------------------------------------------------------------
+
+const TranslationCreateParams = Type.Object({
+  filePath: Type.String({
+    description: "Project-relative EPUB/PDF/TXT/Markdown source file path to translate.",
+  }),
+  sourceLanguage: Type.String({
+    description: "Source language, e.g. ja, en, zh, ko, auto.",
+  }),
+  targetLanguage: Type.String({
+    description: "Target language, e.g. zh, en, ja.",
+  }),
+  title: Type.Optional(Type.String({
+    description: "Optional translation project title.",
+  })),
+  segmentMaxChars: Type.Optional(Type.Number({
+    description: "Optional max chars per segment before splitting long paragraphs.",
+  })),
+});
+
+type TranslationCreateParamsType = Static<typeof TranslationCreateParams>;
+
+export function createTranslationCreateTool(
+  projectRoot: string,
+  options: { readonly actionPayload?: ActionPayload } = {},
+): AgentTool<typeof TranslationCreateParams> {
+  return {
+    name: "translation_create",
+    description:
+      "Create an InkOS translation project from an EPUB/PDF/TXT/Markdown file. " +
+      "This only ingests and segments the source; running the actual translation is a separate long task.",
+    label: "Translation",
+    parameters: TranslationCreateParams,
+    async execute(_toolCallId: string, params: TranslationCreateParamsType): Promise<AgentToolResult<unknown>> {
+      const payload = options.actionPayload?.translationCreate;
+      const result = await createTranslationProjectFromFile(projectRoot, {
+        filePath: payload?.filePath ?? params.filePath,
+        sourceLanguage: payload?.sourceLanguage ?? params.sourceLanguage,
+        targetLanguage: payload?.targetLanguage ?? params.targetLanguage,
+        title: payload?.title ?? params.title,
+        segmentMaxChars: payload?.segmentMaxChars ?? params.segmentMaxChars,
+      });
+      return textResult(
+        [
+          `Translation project "${result.manifest.title}" created.`,
+          `ID: ${result.manifest.id}`,
+          `Source: ${result.manifest.source.kind} ${result.manifest.sourceLanguage} -> ${result.manifest.targetLanguage}`,
+          `Chapters: ${result.manifest.chapters.length}`,
+          `Manifest: ${result.manifestPath}`,
+        ].join("\n"),
+        { kind: "translation_project_created", ...result },
+      );
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 4. Script and Storyboard tools
 // ---------------------------------------------------------------------------
 
 const ScriptCreateParams = Type.Object({
