@@ -2,18 +2,34 @@
 
 [中文](CHANGELOG.md) | English
 
-## Unreleased
+## v1.7.0
 
-### Improvements
+### Release Focus
 
-- Chat gains an `import_chapters` tool: existing novels in local files/directories (including attachments uploaded in chat) can be imported as real book chapters, with settings reverse-engineered automatically and chapter state replayed; its role is clearly separated from `ingest_material` (which only stores reference material) (#324)
-- Services with dynamic model lists such as OpenRouter (openrouter/newapi/kkaiapi/ppio/siliconcloud) no longer block user-configured models with a static whitelist; the openrouter connectivity probe model switched to the long-lived `openrouter/auto`, fixing 404s caused by falling back to a delisted model (#300)
-- The MiniMax integration now requests `reasoning_split` by default, so thinking content no longer leaks into chapter/chat prose as `<think>` tags (M2.x thinking cannot be disabled server-side); as a safety net, a complete think block at the start of a response is stripped uniformly (#329)
-- The revision gate is now configurable: `writing.revisionGate` supports three levels — strict (default, current behavior) / lenient (apply as long as it is not worse) / always (manual revisions are always applied) — with global and per-book overrides (#326)
-- The CLI now respects book-level `writing.reviewMode` (previously `inkos write next` always ran automatic review); new `inkos auto [book-id] <target-chapter>` writes continuously and automatically up to the target chapter (#307)
-- Notification channels support `format: text` (the default remains markdown); `write next / write rewrite / auto / revise / audit` gain `--notify` to send a notification when the action completes or fails (#308)
-- Studio adds an "expand action details by default" browser preference (Project Settings → Chat interface); small tool rows such as read/grep can also be expanded to view their output when results exist (#306)
-- English parity batch: added English prompt branches for the short-fiction / script / interactive-film pipelines, bilingual copy for dynamic areas of the Studio UI, and CLI fixes for environment-language fallback and hardcoded Chinese output; added the full English changelog `CHANGELOG.en.md` and filled in missing English README sections
+Major multilingual creation and long-task reliability release. InkOS gains a complete long-form translation and localization workflow, while English support now extends through short fiction, scripts, storyboards, interactive film, Studio, and the CLI. Chat-driven novel import, configurable review and revision, automatic write-lock recovery, and abort propagation make long-form collaboration and cross-platform use more reliable.
+
+### Major Features
+
+- Added a translation and localization workflow for EPUB, text-based PDF, TXT, and Markdown sources, with chapter-aware semantic segmentation, glossary management, chapter review, and TXT / Markdown / EPUB export
+- Added the Studio Translation workbench for human-readable source and target languages, project creation, translation runs, side-by-side source and translated text review, review reports, and complete-file export
+- Added `inkos translate create / run / export` to the CLI. Studio Chat can also propose a confirmed translation action without requiring users to know language codes such as `zh` or `en`
+- Added English prompt branches for short fiction, scripts, storyboards, and interactive film, plus bilingual dynamic Studio copy and corrected CLI environment-language fallback
+- Added the Chat `import_chapters` tool: existing novels from local files, directories, or chat attachments can become real book chapters, with settings reverse-engineered and chapter state replayed. This is distinct from `ingest_material`, which only stores reference material (#324)
+
+### Collaboration And Control
+
+- Added configurable `writing.revisionGate` policies: strict, lenient, and always, with project-level and per-book overrides. Rejected revisions now report before/after review metrics and remaining issues (#326)
+- The CLI now respects per-book `writing.reviewMode`; new `inkos auto [book-id] <target-chapter>` writes continuously to a target chapter (#307)
+- Notification channels support plain text, and `write next / write rewrite / auto / revise / audit` can send completion or failure notifications with `--notify` (#308)
+- Studio can expand action details by default, including read / grep tool results, making completed work directly inspectable (#306)
+
+### Reliability And Compatibility
+
+- Replaced fragile write-lock files with owned, heartbeating cross-process leases. Locks left by the same process, dead processes, or expired leases recover automatically; active conflicts return `BOOK_BUSY` instead of asking users to delete `.write.lock` manually (#337)
+- Studio abort actions now propagate through pi-agent, the writing pipeline, and model requests, preventing background writes after the UI has stopped a task
+- Dynamic model services such as OpenRouter, NewAPI, kkaiapi, PPIO, and SiliconCloud no longer reject user models through static allowlists; OpenRouter probing now uses the long-lived `openrouter/auto` model (#300)
+- MiniMax responses use reasoning separation by default, with a shared fallback that removes complete leading think blocks before they enter chapters or chat prose (#329)
+- Uploaded attachments and translation sources now return portable POSIX project-relative paths across Windows and Unix systems
 
 ## v1.6.3
 

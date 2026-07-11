@@ -1,6 +1,6 @@
 {
   "name": "@actalk/inkos",
-  "version": "1.6.3",
+  "version": "1.7.0",
   "description": "Story Creation AI Agent CLI for long-form fiction, InkOS Short, fan works, continuations, covers, and interactive worlds.",
   "keywords": [
     "story-creation-ai-agent",
@@ -49,12 +49,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@actalk/inkos-core": "1.6.3",
-    "@actalk/inkos-studio": "1.6.3",
+    "@actalk/inkos-core": "1.7.0",
+    "@actalk/inkos-studio": "1.7.0",
     "commander": "^13.0.0",
     "dotenv": "^16.4.0",
     "epub-gen-memory": "^1.0.10",
-    "ink": "^7.0.0",
+    "ink": "7.0.0",
     "ink-text-input": "^6.0.0",
     "marked": "^15.0.12",
     "marked-terminal": "^7.3.0",

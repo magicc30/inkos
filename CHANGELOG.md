@@ -2,18 +2,34 @@
 
 [English](CHANGELOG.en.md) | 中文
 
-## Unreleased
+## v1.7.0
 
-### Improvements
+### Release Focus
 
-- Chat 新增 `import_chapters` 工具：可把本地文件/目录（含对话上传的附件）里的已有小说导入为书籍真实章节，自动逆向生成设定并重放章节状态；与 `ingest_material`（只存参考资料）分工明确（#324）
-- OpenRouter 等动态模型清单服务（openrouter/newapi/kkaiapi/ppio/siliconcloud）不再用静态白名单拦截用户配置的模型；openrouter 连通性探测模型更换为长期存在的 `openrouter/auto`，修复回退到已下架模型导致的 404（#300）
-- MiniMax 接入默认请求 `reasoning_split`，思考内容不再以 `<think>` 标签混进章节/对话正文（M2.x 的 thinking 无法在服务端关闭）；响应起始处的完整 think 块统一剥离兜底（#329）
-- 修订判断标准可配置：`writing.revisionGate` 三档 strict（默认，现状）/ lenient（不变差即应用）/ always（手动修订一律应用），支持全局与书级覆盖（#326）
-- CLI 现在遵守书级 `writing.reviewMode`（此前 `inkos write next` 永远自动审查）；新增 `inkos auto [book-id] <目标章号>` 连续自动写作到指定章（#307）
-- 通知渠道支持 `format: text`（默认仍为 markdown）；`write next / write rewrite / auto / revise / audit` 新增 `--notify`，动作完成或失败后发送通知（#308）
-- Studio 新增"操作详情默认展开"浏览器偏好（项目设置 → 对话界面）；read/grep 等小工具行有结果时也可展开查看正文（#306）
-- 英文能力对齐批量改动：短篇 / 剧本 / 互动影游管线新增英文提示词分支，Studio 界面动态区补充中英双语文案，CLI 修复环境语言回退与硬编码中文输出；新增全量英文更新日志 `CHANGELOG.en.md` 并补齐英文 README 缺失章节
+多语言创作与长任务可靠性大版本：新增完整的长文翻译 / 本地化工作流，并把英文能力扩展到短篇、剧本、分镜、互动影游、Studio 与 CLI。与此同时，Chat 导入已有小说、可配置审稿修订、写锁自动恢复和中断信号传递，让长篇协作与跨平台运行更稳定。
+
+### Major Features
+
+- 新增翻译 / 本地化工作流：支持导入 EPUB、文本型 PDF、TXT 和 Markdown，按章节与语义段翻译，维护术语表并执行章节审校，可导出 TXT、Markdown 或 EPUB
+- Studio 新增翻译工作台：可使用自然语言填写任意源语言 / 目标语言，创建项目、运行翻译、在网页内对照查看原文与译文、阅读审校报告并导出完整文件
+- CLI 新增 `inkos translate create / run / export`；Studio Chat 也可通过确认动作创建翻译项目，不要求用户记忆 `zh`、`en` 等语言缩写
+- 短篇、剧本、分镜和互动影游管线新增英文提示词分支；Studio 动态界面与 CLI 环境语言回退同步补齐，英文不再只是外层 UI 翻译
+- Chat 新增 `import_chapters` 工具：可把本地文件 / 目录及对话附件中的已有小说导入为真实章节，自动逆向生成设定并重放章节状态；与只保存参考资料的 `ingest_material` 明确分工（#324）
+
+### Collaboration And Control
+
+- 修订判断标准新增 `writing.revisionGate`：支持 strict、lenient、always 三档，并可按项目或单本书覆盖；未落盘时返回前后审稿指标和具体剩余问题（#326）
+- CLI 遵守单本书的 `writing.reviewMode`；新增 `inkos auto [book-id] <目标章号>` 连续写作到指定章节（#307）
+- 通知渠道支持纯文本格式；`write next / write rewrite / auto / revise / audit` 支持通过 `--notify` 发送完成或失败通知（#308）
+- Studio 可默认展开操作详情，read / grep 等工具结果也能直接查看，降低“做了但看不到结果”的不透明感（#306）
+
+### Reliability And Compatibility
+
+- 写锁升级为带所有权、心跳和租约的跨进程锁：同进程遗留锁、进程已退出的锁和过期锁会自动恢复；活跃冲突返回 `BOOK_BUSY`，不再要求用户手工删除 `.write.lock`（#337）
+- Studio 中止操作会沿 pi-agent、写作管线和模型请求向下传播，避免界面已停止但后台仍继续写盘
+- OpenRouter、NewAPI、kkaiapi、PPIO、硅基流动等动态模型服务不再用静态白名单拦截用户模型；OpenRouter 探测改用长期存在的 `openrouter/auto`（#300）
+- MiniMax 默认启用 reasoning 分离，并统一剥离响应开头完整的 think 块，避免思考内容混入章节或聊天正文（#329）
+- 上传附件和翻译源文件统一返回 POSIX 项目相对路径，修复 Windows 与其他平台之间的路径不一致
 
 ## v1.6.3
 
