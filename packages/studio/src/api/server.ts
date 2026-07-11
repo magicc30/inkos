@@ -621,7 +621,7 @@ async function normalizeAgentAttachments(
     const storedName = `${Date.now()}-${index + 1}-${filename}`;
     const storedPath = join(uploadDir, storedName);
     await writeFile(storedPath, parsed.buffer);
-    const relPath = relative(root, storedPath);
+    const relPath = toPosixPath(relative(root, storedPath));
 
     if (mimeType.startsWith("image/")) {
       out.push({
@@ -683,7 +683,7 @@ async function storeTranslationUpload(
   const storedPath = join(uploadDir, storedName);
   await writeFile(storedPath, parsed.buffer);
   return {
-    storedPath: relative(root, storedPath),
+    storedPath: toPosixPath(relative(root, storedPath)),
     size: parsed.buffer.byteLength,
     mimeType: parsed.mimeType,
   };
