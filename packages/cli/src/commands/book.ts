@@ -4,13 +4,17 @@ import { createInterface } from "node:readline";
 import { join, resolve } from "node:path";
 import { deriveBookIdFromTitle, normalizePlatformOrOther, PipelineRunner, StateManager, type BookConfig } from "@actalk/inkos-core";
 import {
+  formatBookBackupCreated,
+  formatBookBackupListEmpty,
   formatBookCreateCreated,
   formatBookCreateCreating,
   formatBookCreateFoundationReady,
   formatBookCreateLocation,
   formatBookCreateNextStep,
+  formatBookRestoreDone,
   resolveCliLanguage,
 } from "../localization.js";
+import { createBookBackup, listBookBackups, restoreBookBackup } from "../book-backup.js";
 import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError } from "../utils.js";
 
 export const bookCommand = new Command("book")
@@ -254,6 +258,81 @@ bookCommand
         log(JSON.stringify({ error: String(e) }));
       } else {
         logError(`Failed to delete book: ${e}`);
+      }
+      process.exit(1);
+    }
+  });
+
+bookCommand
+  .command("backup")
+  .description("Snapshot the whole book directory into .inkos/backups/<book-id>/ (or list backups with --list)")
+  .argument("<book-id>", "Book ID")
+  .option("--list", "List existing backups instead of creating one")
+  .option("--json", "Output JSON")
+  .action(async (bookId: string, opts) => {
+    try {
+      const root = findProjectRoot();
+      // Backups must also work on broken books (e.g. corrupted book.json),
+      // so the output language follows the environment, not the book config.
+      const language = resolveCliLanguage();
+
+      if (opts.list) {
+        const backups = await listBookBackups(root, bookId);
+        if (opts.json) {
+          log(JSON.stringify({ bookId, backups }, null, 2));
+        } else if (backups.length === 0) {
+          log(formatBookBackupListEmpty(language, bookId));
+        } else {
+          for (const backup of backups) {
+            log(`  ${backup.id}  ${backup.createdAt}`);
+          }
+        }
+        return;
+      }
+
+      const result = await createBookBackup(root, bookId);
+      if (opts.json) {
+        log(JSON.stringify({ bookId, backupId: result.backupId }, null, 2));
+      } else {
+        log(formatBookBackupCreated(language, bookId, result.backupId));
+      }
+    } catch (e) {
+      if (opts.json) {
+        log(JSON.stringify({ error: String(e) }));
+      } else {
+        logError(`Failed to back up book: ${e}`);
+      }
+      process.exit(1);
+    }
+  });
+
+bookCommand
+  .command("restore")
+  .description("Restore a whole-book backup (the current book state is automatically backed up first)")
+  .argument("<book-id>", "Book ID")
+  .argument("<backup-id>", "Backup ID, see `inkos book backup <book-id> --list`")
+  .option("--json", "Output JSON")
+  .action(async (bookId: string, backupId: string, opts) => {
+    try {
+      const root = findProjectRoot();
+      const language = resolveCliLanguage();
+
+      const result = await restoreBookBackup(root, bookId, backupId);
+
+      if (opts.json) {
+        log(JSON.stringify(result, null, 2));
+      } else {
+        log(formatBookRestoreDone(language, {
+          bookId,
+          backupId: result.restoredFrom,
+          preRestoreBackupId: result.preRestoreBackupId,
+        }));
+      }
+    } catch (e) {
+      if (opts.json) {
+        log(JSON.stringify({ error: String(e) }));
+      } else {
+        logError(`Failed to restore book: ${e}`);
       }
       process.exit(1);
     }

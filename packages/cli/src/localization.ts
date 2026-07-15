@@ -509,3 +509,36 @@ export function formatChapterDeleteDone(
     en: `Deleted chapter ${params.number} ${params.title}: chapter file kept at ${trashNote}; index and story state rolled back to chapter ${params.rolledBackTo}.`,
   });
 }
+
+export function formatBookBackupCreated(language: CliLanguage, bookId: string, backupId: string): string {
+  return localize(language, {
+    zh: `已备份 ${bookId} → .inkos/backups/${bookId}/${backupId}/`,
+    en: `Backed up ${bookId} → .inkos/backups/${bookId}/${backupId}/`,
+  });
+}
+
+export function formatBookBackupListEmpty(language: CliLanguage, bookId: string): string {
+  return localize(language, {
+    zh: `${bookId} 还没有备份。用 inkos book backup ${bookId} 创建一份。`,
+    en: `No backups for ${bookId} yet. Create one with: inkos book backup ${bookId}`,
+  });
+}
+
+export function formatBookRestoreDone(
+  language: CliLanguage,
+  params: { bookId: string; backupId: string; preRestoreBackupId: string | null },
+): string {
+  const preNote = params.preRestoreBackupId
+    ? localize(language, {
+        zh: `恢复前的状态已自动备份为 ${params.preRestoreBackupId}。`,
+        en: `The pre-restore state was automatically backed up as ${params.preRestoreBackupId}.`,
+      })
+    : localize(language, {
+        zh: "书目录当时不存在，未创建恢复前备份。",
+        en: "The book directory did not exist, so no pre-restore backup was created.",
+      });
+  return localize(language, {
+    zh: `已把 ${params.bookId} 恢复到备份 ${params.backupId}。${preNote}`,
+    en: `Restored ${params.bookId} to backup ${params.backupId}. ${preNote}`,
+  });
+}
