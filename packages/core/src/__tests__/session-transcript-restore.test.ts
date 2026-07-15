@@ -1858,6 +1858,143 @@ describe("session transcript restore", () => {
     ]);
   });
 
+  it("restores a direct terminal tool call as a standalone assistant card", async () => {
+    await appendTranscriptEvent(projectRoot, {
+      type: "session_created",
+      version: 1,
+      sessionId: "s1",
+      seq: 1,
+      timestamp: 1,
+      bookId: "book-a",
+      sessionKind: "book",
+      title: null,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    await appendTranscriptEvent(projectRoot, {
+      type: "request_started",
+      version: 1,
+      sessionId: "s1",
+      requestId: "r1",
+      sessionKind: "book",
+      seq: 2,
+      timestamp: 2,
+      input: "重新核验推演",
+    });
+    await appendTranscriptEvent(projectRoot, {
+      type: "message",
+      version: 1,
+      sessionId: "s1",
+      requestId: "r1",
+      uuid: "u1",
+      parentUuid: null,
+      seq: 3,
+      role: "user",
+      timestamp: 3,
+      message: { role: "user", content: "重新核验推演", timestamp: 3 },
+    } as MessageEvent);
+    await appendTranscriptEvent(projectRoot, {
+      type: "message",
+      version: 1,
+      sessionId: "s1",
+      requestId: "r1",
+      uuid: "a1",
+      parentUuid: "u1",
+      seq: 4,
+      role: "assistant",
+      timestamp: 4,
+      toolCallId: "forecast-1",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "核验推演是否过期" },
+          {
+            type: "toolCall",
+            id: "forecast-1",
+            name: "get_narrative_forecast",
+            arguments: { forecastId: "fc-1" },
+          },
+        ],
+        api: "openai-completions",
+        provider: "openai",
+        model: "deepseek-v4-flash",
+        usage,
+        stopReason: "toolUse",
+        timestamp: 4,
+      },
+    } as MessageEvent);
+    await appendTranscriptEvent(projectRoot, {
+      type: "message",
+      version: 1,
+      sessionId: "s1",
+      requestId: "r1",
+      uuid: "t1",
+      parentUuid: "a1",
+      seq: 5,
+      role: "toolResult",
+      timestamp: 5,
+      toolCallId: "forecast-1",
+      sourceToolAssistantUuid: "a1",
+      message: {
+        role: "toolResult",
+        toolCallId: "forecast-1",
+        toolName: "get_narrative_forecast",
+        content: [{ type: "text", text: "Forecast fc-1 is active." }],
+        details: { kind: "narrative_forecast", stale: false },
+        isError: false,
+        timestamp: 5,
+      },
+    } as MessageEvent);
+    await appendTranscriptEvent(projectRoot, {
+      type: "message",
+      version: 1,
+      sessionId: "s1",
+      requestId: "r1",
+      uuid: "a2",
+      parentUuid: "t1",
+      seq: 6,
+      role: "assistant",
+      timestamp: 6,
+      message: {
+        role: "assistant",
+        content: [],
+        api: "openai-completions",
+        provider: "openai",
+        model: "deepseek-v4-flash",
+        usage,
+        stopReason: "stop",
+        timestamp: 6,
+      },
+    } as MessageEvent);
+    await appendTranscriptEvent(projectRoot, {
+      type: "request_committed",
+      version: 1,
+      sessionId: "s1",
+      requestId: "r1",
+      seq: 7,
+      timestamp: 7,
+    });
+
+    const session = await deriveBookSessionFromTranscript(projectRoot, "s1");
+
+    expect(session?.messages).toEqual([
+      expect.objectContaining({ role: "user", content: "重新核验推演" }),
+      expect.objectContaining({
+        role: "assistant",
+        content: "",
+        thinking: "核验推演是否过期",
+        toolExecutions: [expect.objectContaining({
+          id: "forecast-1",
+          tool: "get_narrative_forecast",
+          label: "核验剧情推演",
+          args: { forecastId: "fc-1" },
+          details: { kind: "narrative_forecast", stale: false },
+          status: "completed",
+        })],
+      }),
+    ]);
+  });
+
   it("restores play tool turns as tool-only messages instead of duplicating scene text", async () => {
     await appendTranscriptEvent(projectRoot, {
       type: "session_created",
