@@ -471,10 +471,24 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       ?? (activeBookId ? "book" : "chat");
     const actionSource = options?.actionSource ?? "free-text";
     const playMode = options?.playMode ?? session.playMode;
+    // 确认式生产任务的发送轮不是"聊天轮"：请求会挂起到任务结束，
+    // 期间用户仍可继续聊天，所以不置 isChatStreaming。
+    const isProductionTaskSend = isConfirmedProductionSend(actionSource, options?.requestedIntent);
+    // 聊天轮失败时记录原样发送参数（text + options），供"重试"按钮一键重发。
+    // 生产任务轮不记录：任务失败由任务卡自己展示，重试按钮只管聊天轮。
+    const rememberFailedSend = () => {
+      if (isProductionTaskSend) return;
+      set((state) => ({
+        sessions: updateSession(state.sessions, sessionId, () => ({
+          lastFailedSend: options ? { text, options } : { text },
+        })),
+      }));
+    };
 
     if (!get().selectedModel) {
       get().addUserMessage(sessionId, formatUserMessageForDisplay(userInstruction, attachments));
       get().addErrorMessage(sessionId, tr("请先选择一个模型", "Select a model first"));
+      rememberFailedSend();
       return;
     }
 
@@ -502,6 +516,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         }));
       } catch (err) {
         get().addErrorMessage(sessionId, err instanceof Error ? err.message : String(err));
+        rememberFailedSend();
         return;
       }
     }
@@ -511,9 +526,6 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
     const requestedSkills = mergeSkillIds(skillDirectives.requestedSkills, options?.requestedSkills);
     const disabledSkills = mergeSkillIds([], options?.disabledSkills);
     const streamTs = Date.now() + 1;
-    // 确认式生产任务的发送轮不是"聊天轮"：请求会挂起到任务结束，
-    // 期间用户仍可继续聊天，所以不置 isChatStreaming。
-    const isProductionTaskSend = isConfirmedProductionSend(actionSource, options?.requestedIntent);
 
     set((state) => ({
       input: "",
@@ -522,6 +534,9 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         isStreaming: true,
         isChatStreaming: !isProductionTaskSend,
         lastError: null,
+        // 新一轮发送开始即清除上一条失败记录：本轮失败会重新记录，
+        // 本轮成功则说明对话已继续，旧的重试入口不再保留。
+        lastFailedSend: undefined,
       })),
     }));
 
@@ -607,6 +622,9 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         } else {
           get().addErrorMessage(sessionId, errorMessage);
         }
+        // 用户中途主动停止（abortSession）会先把 isChatStreaming 置回 false：
+        // 那不算失败，不记录重试。
+        if (get().sessions[sessionId]?.isChatStreaming) rememberFailedSend();
       } else if (finalContent) {
         if (hasStream) {
           get().finalizeStream(sessionId, streamTs, finalContent, toolCall);
@@ -653,10 +671,15 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
             "The model returned no text. Check the protocol type (chat/responses), the streaming toggle, or upstream service compatibility.",
           );
           get().addErrorMessage(sessionId, emptyMessage);
+          // 空响应同样算这轮失败；用户主动停止的轮 isChatStreaming 已是 false，不记录。
+          if (get().sessions[sessionId]?.isChatStreaming) rememberFailedSend();
         }
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
+      // 用户主动停止会先把 isChatStreaming 置回 false，被中止的请求随后 reject 到
+      // 这里：那不算失败，不记录重试；真正的请求失败此刻 isChatStreaming 仍为 true。
+      if (get().sessions[sessionId]?.isChatStreaming) rememberFailedSend();
       const failureAlreadyShown = get().sessions[sessionId]?.messages.some((message) => {
         const executions = [
           ...(message.toolExecutions ?? []),
@@ -697,5 +720,16 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         }));
       }
     }
+  },
+
+  retryLastSend: async (sessionId) => {
+    const session = get().sessions[sessionId];
+    const failed = session?.lastFailedSend;
+    if (!session || !failed || session.isChatStreaming) return;
+    // 先清除记录再重发：重复点击时第二次进来已无记录，直接返回，避免双发。
+    set((state) => ({
+      sessions: updateSession(state.sessions, sessionId, () => ({ lastFailedSend: undefined })),
+    }));
+    await get().sendMessage(sessionId, failed.text, failed.options);
   },
 });

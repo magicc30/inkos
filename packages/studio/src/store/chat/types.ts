@@ -142,6 +142,13 @@ export interface SendMessageOptions {
   readonly playMode?: PlayMode;
 }
 
+// 一次失败的聊天轮发送的原样参数（sendMessage 的 text 与 options），
+// 供"重试"按钮一键重发。
+export interface FailedSendRecord {
+  readonly text: string;
+  readonly options?: SendMessageOptions;
+}
+
 export interface ChatAttachmentPayload {
   readonly id: string;
   readonly filename: string;
@@ -164,6 +171,10 @@ export interface SessionRuntime {
   // 用户仍可继续发消息。
   readonly isChatStreaming: boolean;
   readonly lastError: string | null;
+  // 上一条失败的聊天轮发送记录：请求失败（fetch 拒绝、/agent 返回 error 等）时写入，
+  // 新一轮发送开始时清除。用户主动停止与后台生产任务轮的失败不记录
+  //（任务卡有自己的失败展示）。存在且非聊天流式中时 UI 显示"重试"按钮。
+  readonly lastFailedSend?: FailedSendRecord;
   // 仅前端存在、尚未持久化到磁盘的草稿会话。发送第一条消息时才调 POST /sessions 把它落盘。
   readonly isDraft: boolean;
 }
@@ -211,6 +222,8 @@ export interface MessageActions {
   deleteSession: (sessionId: string) => Promise<void>;
   loadSessionDetail: (sessionId: string) => Promise<void>;
   sendMessage: (sessionId: string, text: string, options?: SendMessageOptions) => Promise<void>;
+  // 用 lastFailedSend 记录的原样参数重发上一条失败的消息；无记录或聊天轮流式中时不做任何事。
+  retryLastSend: (sessionId: string) => Promise<void>;
   // scope="chat" 只中止当前聊天轮，不停后台生产任务；默认 "all" 两者一起停。
   abortSession: (sessionId: string, scope?: "chat" | "all") => Promise<void>;
   setSelectedModel: (model: string, service: string) => void;

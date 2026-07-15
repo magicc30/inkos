@@ -915,6 +915,113 @@ describe("chat message actions", () => {
     await sent;
   });
 
+  it("records the failed send with its original text and options when /agent rejects", async () => {
+    const store = createTestStore();
+    const sessionId = store.getState().createDraftSession("demo-book", "book");
+    store.getState().setSelectedModel("deepseek-v4-flash", "kkaiapi");
+    fetchJson
+      .mockResolvedValueOnce({ session: { sessionId, bookId: "demo-book", sessionKind: "book" } })
+      .mockRejectedValueOnce(new Error("Request timed out"));
+
+    await store.getState().sendMessage(sessionId, "写下一章", {
+      sessionKind: "book",
+      requestedSkills: ["style-guard"],
+    });
+
+    expect(store.getState().sessions[sessionId]?.lastError).toBe("Request timed out");
+    expect(store.getState().sessions[sessionId]?.lastFailedSend).toEqual({
+      text: "写下一章",
+      options: { sessionKind: "book", requestedSkills: ["style-guard"] },
+    });
+  });
+
+  it("records the failed send when /agent responds with an error payload", async () => {
+    const store = createTestStore();
+    const sessionId = store.getState().createDraftSession(null, "chat");
+    store.getState().setSelectedModel("deepseek-v4-flash", "kkaiapi");
+    fetchJson
+      .mockResolvedValueOnce({ session: { sessionId, bookId: null, sessionKind: "chat" } })
+      .mockResolvedValueOnce({
+        error: { code: "upstream_error", message: "模型接口 500" },
+        session: { sessionId, sessionKind: "chat" },
+      });
+
+    await store.getState().sendMessage(sessionId, "你好");
+
+    expect(store.getState().sessions[sessionId]?.lastFailedSend).toEqual({ text: "你好" });
+  });
+
+  it("retries the last failed send with identical /agent parameters and clears the record", async () => {
+    const store = createTestStore();
+    const sessionId = store.getState().createDraftSession("demo-book", "book");
+    store.getState().setSelectedModel("deepseek-v4-flash", "kkaiapi");
+    fetchJson
+      .mockResolvedValueOnce({ session: { sessionId, bookId: "demo-book", sessionKind: "book" } })
+      .mockRejectedValueOnce(new Error("Request timed out"))
+      .mockResolvedValueOnce({ response: "ok", session: { sessionId, sessionKind: "book" } });
+
+    await store.getState().sendMessage(sessionId, "写下一章", {
+      sessionKind: "book",
+      requestedSkills: ["style-guard"],
+    });
+
+    await store.getState().retryLastSend(sessionId);
+
+    const agentCalls = fetchJson.mock.calls.filter(([path]) => path === "/agent");
+    expect(agentCalls).toHaveLength(2);
+    const firstBody = JSON.parse((agentCalls[0]?.[1] as { body: string }).body);
+    const retryBody = JSON.parse((agentCalls[1]?.[1] as { body: string }).body);
+    expect(retryBody).toEqual(firstBody);
+    expect(store.getState().sessions[sessionId]?.lastFailedSend).toBeUndefined();
+  });
+
+  it("keeps no failed-send record after a successful round", async () => {
+    const store = createTestStore();
+    const sessionId = store.getState().createDraftSession(null, "chat");
+    store.getState().setSelectedModel("deepseek-v4-flash", "kkaiapi");
+    fetchJson
+      .mockResolvedValueOnce({ session: { sessionId, bookId: null, sessionKind: "chat" } })
+      .mockResolvedValueOnce({ response: "你好！", session: { sessionId, sessionKind: "chat" } });
+
+    await store.getState().sendMessage(sessionId, "你好");
+
+    expect(store.getState().sessions[sessionId]?.lastFailedSend).toBeUndefined();
+  });
+
+  it("does not record a failed send when the user stops the round themselves", async () => {
+    const store = createTestStore();
+    const sessionId = store.getState().createDraftSession(null, "chat");
+    store.getState().setSelectedModel("deepseek-v4-flash", "kkaiapi");
+
+    let rejectAgent!: (error: Error) => void;
+    fetchJson
+      .mockResolvedValueOnce({ session: { sessionId, bookId: null, sessionKind: "chat" } })
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => {
+        rejectAgent = reject;
+      }))
+      .mockResolvedValueOnce({});
+
+    const sent = store.getState().sendMessage(sessionId, "你好");
+    await vi.waitFor(() => expect(fakeEventSources).toHaveLength(1));
+
+    await store.getState().abortSession(sessionId);
+    rejectAgent(new Error("This operation was aborted"));
+    await sent;
+
+    expect(store.getState().sessions[sessionId]?.lastFailedSend).toBeUndefined();
+  });
+
+  it("does nothing when retryLastSend is called without a failed-send record", async () => {
+    const store = createTestStore();
+    const sessionId = store.getState().createDraftSession(null, "chat");
+    store.getState().setSelectedModel("deepseek-v4-flash", "kkaiapi");
+    fetchJson.mockClear();
+
+    await store.getState().retryLastSend(sessionId);
+
+    expect(fetchJson).not.toHaveBeenCalled();
+  });
+
   it("routes task-tagged context compression to the task card and never into the chat stream", async () => {
     const store = createTestStore();
     const sessionId = await setupRunningTaskSession(store);
