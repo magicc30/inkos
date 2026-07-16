@@ -28,6 +28,7 @@ describe("ReviserAgent", () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-reviser-lang-test-"));
     const bookDir = join(root, "book");
     await mkdir(join(bookDir, "story"), { recursive: true });
+    await mkdir(join(root, "prompt", "longform"), { recursive: true });
 
     await writeFile(
       join(bookDir, "book.json"),
@@ -45,6 +46,7 @@ describe("ReviserAgent", () => {
       }, null, 2),
       "utf-8",
     );
+    await writeFile(join(root, "prompt", "longform", "reviser.md"), "PROJECT REVISER OVERRIDE", "utf-8");
 
     const agent = new ReviserAgent({
       client: {
@@ -88,6 +90,7 @@ describe("ReviserAgent", () => {
       const systemPrompt = messages?.[0]?.content ?? "";
 
       expect(systemPrompt).toContain("MUST be in English");
+      expect(systemPrompt).toContain("PROJECT REVISER OVERRIDE");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

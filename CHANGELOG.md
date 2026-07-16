@@ -1,5 +1,87 @@
 # Changelog
 
+[English](CHANGELOG.en.md) | 中文
+
+## v1.7.0
+
+### Release Focus
+
+多语言创作与长任务可靠性大版本：新增完整的长文翻译 / 本地化工作流，并把英文能力扩展到短篇、剧本、分镜、互动影游、Studio 与 CLI。与此同时，Chat 导入已有小说、可配置审稿修订、写锁自动恢复和中断信号传递，让长篇协作与跨平台运行更稳定。
+
+### Major Features
+
+- 新增翻译 / 本地化工作流：支持导入 EPUB、文本型 PDF、TXT 和 Markdown，按章节与语义段翻译，维护术语表并执行章节审校，可导出 TXT、Markdown 或 EPUB
+- Studio 新增翻译工作台：可使用自然语言填写任意源语言 / 目标语言，创建项目、运行翻译、在网页内对照查看原文与译文、阅读审校报告并导出完整文件
+- CLI 新增 `inkos translate init / run / export`；Studio Chat 也可通过确认动作创建翻译项目，不要求用户记忆 `zh`、`en` 等语言缩写
+- 短篇、剧本、分镜和互动影游管线新增英文提示词分支；Studio 动态界面与 CLI 环境语言回退同步补齐，英文不再只是外层 UI 翻译
+- Chat 新增 `import_chapters` 工具：可把本地文件 / 目录及对话附件中的已有小说导入为真实章节，自动逆向生成设定并重放章节状态；与只保存参考资料的 `ingest_material` 明确分工（#324）
+
+### Collaboration And Control
+
+- 修订判断标准新增 `writing.revisionGate`：支持 strict、lenient、always 三档，并可按项目或单本书覆盖；未落盘时返回前后审稿指标和具体剩余问题（#326）
+- CLI 遵守单本书的 `writing.reviewMode`；新增 `inkos auto [book-id] <目标章号>` 连续写作到指定章节（#307）
+- 通知渠道支持纯文本格式；`write next / write rewrite / auto / revise / audit` 支持通过 `--notify` 发送完成或失败通知（#308）
+- Studio 可默认展开操作详情，read / grep 等工具结果也能直接查看，降低“做了但看不到结果”的不透明感（#306）
+
+### Reliability And Compatibility
+
+- 写锁升级为带所有权、心跳和租约的跨进程锁：同进程遗留锁、进程已退出的锁和过期锁会自动恢复；活跃冲突返回 `BOOK_BUSY`，不再要求用户手工删除 `.write.lock`（#337）
+- Studio 中止操作会沿 pi-agent、写作管线和模型请求向下传播，避免界面已停止但后台仍继续写盘
+- OpenRouter、NewAPI、kkaiapi、PPIO、硅基流动等动态模型服务不再用静态白名单拦截用户模型；OpenRouter 探测改用长期存在的 `openrouter/auto`（#300）
+- MiniMax 默认启用 reasoning 分离，并统一剥离响应开头完整的 think 块，避免思考内容混入章节或聊天正文（#329）
+- 上传附件和翻译源文件统一返回 POSIX 项目相对路径，修复 Windows 与其他平台之间的路径不一致
+
+## v1.6.3
+
+### Hotfix
+
+- 修复 `@actalk/inkos@1.6.2` / `@actalk/inkos-studio@1.6.2` 发布到 npm 时 registry manifest 泄漏 `workspace:*` 的问题；Windows / npm 全局升级请直接安装 `1.6.3` 或更新到 `latest`
+- 发布校验现在会拒绝 publishable manifest 中的 `workspace:` 依赖，避免同类安装错误复发
+- MiniMax 官方 OpenAI-compatible 接入新增 `MiniMax-M3` 模型卡，并对 `MiniMax-M3*` 默认发送 `thinking: { "type": "disabled" }`，减少接口默认返回 thinking 内容的问题
+
+## v1.6.2
+
+### Release Focus
+
+Chat 协作与可调提示词热更新：在 v1.6.0 的互动影游 / Skill 系统基础上，补齐用户上传文件、图片附件、长任务中断、材料归档检索和 Studio 提示词包编辑。核心目标是让 Chat 更像真实创作工作台：能看用户给的材料，能停下长任务，能把外部资料沉淀为可检索参考，也能让用户直接调整关键提示词。
+
+### Improvements
+
+- Studio Chat 支持上传文本 / Markdown / 图片附件；文本材料会进入 LLM 上下文，图片会作为多模态输入传给支持视觉的模型
+- 新增长任务中断能力，用户可在 Chat 中主动停止当前 agent turn，避免长任务卡死后只能刷新
+- 新增材料归档与检索工具：外部材料可保存到项目材料库，并在后续写作 / 讨论中用 evidence trace 检索引用
+- 新增 Studio 提示词包编辑器：在“项目设置 → 提示词”集中查看和调整 longform、Play、互动影游等内置 prompt pack；修改保存为项目级覆盖文件，不改内置默认值
+- Runtime Skill 可继续提供 prompt pack、上下文需求和专业规则；提示词包编辑器让这些规则能被人直接检查和微调
+- 修复 Studio Chat 旧章修订时丢失本轮对话要求的问题：`sub_agent(reviser)` 现在会把用户本轮“重写 / 重修 / 调整方向”的话作为一次性修订 brief 传入长篇管线
+- 修订未落盘时返回更具体的判定信息：展示修订前后 blocking / critical / AI-tell 指标、应用标准和剩余问题，不再只返回笼统的 “kept original chapter”
+- 调整疑似章节正文未落盘兜底：不再默认引导“写下一章”，并避免把“第 N 章修改指令 / 重写方案”误判成正文
+
+### Verification Notes
+
+- 真实模型验收：`kkaiapi / deepseek-v4-flash` 能在回答中返回上传 Markdown 的唯一暗号，证明文档内容进入 LLM 上下文
+- 真实模型验收：`kkaiapi / gpt-5.5` 能识别上传 PNG 的主体颜色，证明图片附件进入多模态输入链路
+
+## v1.6.0
+
+### Release Focus
+
+互动影游与 Skill 系统大版本：把 InkOS 的创作入口从“小说 + Play”继续扩展到互动影游、剧本、分镜和可插拔专业能力。Studio Chat 现在可以按用户意图调用外部 / 内置 skills，也能在需要真实资料时生成可追溯研究报告，同时修复几类影响长任务继续推进和用户协作编辑的稳定性问题。
+
+### Major Features
+
+- 新增互动影游创作与工作台能力：支持分支剧情、变量 / 旗标、角色关系、结局、节点图片和可导出的交互项目包
+- 新增 runtime Skill 系统：内置 / 外部 skill 可被自动匹配或用户强制指定，用于给 Chat / 创作入口注入专业规则、提示词包和上下文需求
+- 新增联网研究工具 `research_web`：可用于世界观、年代、职业、地域、市场和事实核查，输出带 sources / queryLog / unknowns / confidence 的 Markdown 参考报告
+- Studio Skill UI 支持选择、强制使用和添加外部 skill，让专业能力不再只能写死在系统提示词里
+- 剧本、分镜、互动影游入口与 Chat action surface 对齐，重动作继续走确认卡，生成结果可在 Studio 内查看和导出
+
+### Reliability And Fixes
+
+- 修复 `patch_chapter_text` 只能精确命中文本的问题；现在轻微改写的目标段落可用高置信段落定位兜底，仍无法确认时继续明确失败，避免误改
+- 修复审计 / 多章操作失败时可能把 `chapters/index.json` 写成空数组的问题；保存层会从磁盘章节文件重建索引，防止已有章节在 UI 中消失
+- 修复多渠道同模型切换后会话丢失 bookId 的回归风险，并补充测试锁定 session-bound bookId 传递
+- 研究报告保存为 `.inkos/research/` 下的参考材料，不直接污染 story truth、角色卡或正文
+
 ## v1.5.0
 
 ### Release Focus

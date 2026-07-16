@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveActiveBookId, isBookCreateChatRoute } from "./App";
+import { deriveActiveBookId, deriveStartupGate, isBookCreateChatRoute } from "./App";
 
 describe("deriveActiveBookId", () => {
   it("returns the current book across book-centered routes", () => {
@@ -21,5 +21,13 @@ describe("isBookCreateChatRoute", () => {
   it("routes new-book creation through chat instead of the standalone form page", () => {
     expect(isBookCreateChatRoute({ page: "book-create" })).toBe(true);
     expect(isBookCreateChatRoute({ page: "book", bookId: "alpha" })).toBe(false);
+  });
+});
+
+describe("deriveStartupGate", () => {
+  it("shows startup errors instead of spinning forever before the project is ready", () => {
+    expect(deriveStartupGate({ ready: false, projectError: null })).toBe("loading");
+    expect(deriveStartupGate({ ready: false, projectError: "bad inkos.json" })).toBe("error");
+    expect(deriveStartupGate({ ready: true, projectError: "later refetch failed" })).toBe("ready");
   });
 });

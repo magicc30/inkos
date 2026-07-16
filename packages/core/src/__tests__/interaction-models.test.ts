@@ -8,6 +8,11 @@ import {
   InteractionSessionSchema,
   PlayModeSchema,
   RequestedIntentSchema,
+  InteractiveFilmCreateActionPayloadSchema,
+  ScriptCreateActionPayloadSchema,
+  ScriptTargetFormatSchema,
+  SessionKindSchema,
+  StoryboardCreateActionPayloadSchema,
   bindActiveBook,
   clearPendingDecision,
   isTerminalExecutionStatus,
@@ -45,8 +50,15 @@ describe("interaction models", () => {
     expect(ActionSourceSchema.parse("button")).toBe("button");
     expect(RequestedIntentSchema.parse("create_book")).toBe("create_book");
     expect(RequestedIntentSchema.parse("play_start")).toBe("play_start");
+    expect(RequestedIntentSchema.parse("script_create")).toBe("script_create");
+    expect(RequestedIntentSchema.parse("storyboard_create")).toBe("storyboard_create");
+    expect(RequestedIntentSchema.parse("interactive_film_create")).toBe("interactive_film_create");
     expect(RequestedIntentSchema.parse("fanfic_init")).toBe("fanfic_init");
     expect(RequestedIntentSchema.parse("style_imitation")).toBe("style_imitation");
+    expect(SessionKindSchema.parse("script")).toBe("script");
+    expect(SessionKindSchema.parse("storyboard")).toBe("storyboard");
+    expect(SessionKindSchema.parse("interactive-film")).toBe("interactive-film");
+    expect(ScriptTargetFormatSchema.parse("vertical_short_drama")).toBe("vertical_short_drama");
     expect(PlayModeSchema.parse("guided")).toBe("guided");
 
     expect(normalizeActionSource(undefined)).toBe("free-text");
@@ -55,6 +67,43 @@ describe("interaction models", () => {
     expect(normalizeRequestedIntent("")).toBeUndefined();
     expect(normalizePlayMode("open")).toBe("open");
     expect(normalizePlayMode(null)).toBeUndefined();
+  });
+
+  it("validates structured script and storyboard creation payloads", () => {
+    expect(ScriptCreateActionPayloadSchema.parse({
+      title: "冷库账页",
+      targetFormat: "vertical_short_drama",
+      episodeCount: 12,
+      episodeDuration: "2分钟",
+      requirements: "保留调查线七成、家怨三成。",
+    })).toMatchObject({
+      title: "冷库账页",
+      targetFormat: "vertical_short_drama",
+      episodeCount: 12,
+    });
+
+    expect(StoryboardCreateActionPayloadSchema.parse({
+      title: "冷库账页分镜",
+      visualStyle: "写实冷色",
+      aspectRatio: "9:16",
+      granularity: "按关键镜头拆分",
+      maxShots: 18,
+    })).toMatchObject({
+      title: "冷库账页分镜",
+      visualStyle: "写实冷色",
+      maxShots: 18,
+    });
+
+    expect(InteractiveFilmCreateActionPayloadSchema.parse({
+      title: "盛世账页",
+      requirements: "多分支，多结局，变量记录关键抉择。",
+      targetAudience: "欧美互动影游用户",
+      budget: "5000元",
+      referenceMode: "盛世天下式多走向",
+    })).toMatchObject({
+      title: "盛世账页",
+      budget: "5000元",
+    });
   });
 
   it("uses one write-next detector across Studio and TUI entrypoints", () => {

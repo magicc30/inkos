@@ -44,20 +44,24 @@ export const NotifyChannelSchema = z.discriminatedUnion("type", [
     type: z.literal("telegram"),
     botToken: z.string().min(1),
     chatId: z.string().min(1),
+    format: z.enum(["markdown", "text"]).default("markdown"),
   }),
   z.object({
     type: z.literal("wechat-work"),
     webhookUrl: z.string().url(),
+    format: z.enum(["markdown", "text"]).default("markdown"),
   }),
   z.object({
     type: z.literal("feishu"),
     webhookUrl: z.string().url(),
+    format: z.enum(["markdown", "text"]).default("markdown"),
   }),
   z.object({
     type: z.literal("webhook"),
     url: z.string().url(),
     secret: z.string().optional(),
     events: z.array(z.string()).default([]),
+    format: z.enum(["markdown", "text"]).default("markdown"),
   }),
 ]);
 
@@ -92,6 +96,7 @@ export type FoundationConfig = z.infer<typeof FoundationConfigSchema>;
 export const WritingConfigSchema = z.object({
   reviewRetries: z.number().int().min(0).max(10).default(1),
   reviewMode: z.enum(["auto", "manual"]).default("auto"),
+  revisionGate: z.enum(["strict", "lenient", "always"]).default("strict"),
 });
 
 export type WritingConfig = z.infer<typeof WritingConfigSchema>;
@@ -111,6 +116,19 @@ export type InputGovernanceMode = z.infer<typeof InputGovernanceModeSchema>;
 
 const ModelOverrideValueSchema = z.union([z.string(), AgentLLMOverrideSchema]);
 
+export const ResearchSearchConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  provider: z.enum(["tavily", "custom"]).default("tavily"),
+  baseUrl: z.string().url().optional(),
+  apiKey: z.string().optional(),
+  apiKeyEnv: z.string().optional(),
+}).default({
+  enabled: false,
+  provider: "tavily",
+});
+
+export type ResearchSearchConfig = z.infer<typeof ResearchSearchConfigSchema>;
+
 export const ProjectConfigSchema = z.object({
   name: z.string().min(1),
   version: z.literal("0.1.0"),
@@ -124,6 +142,7 @@ export const ProjectConfigSchema = z.object({
   writing: WritingConfigSchema.default({
     reviewRetries: 1,
   }),
+  researchSearch: ResearchSearchConfigSchema,
   modelOverrides: z.record(z.string(), ModelOverrideValueSchema).optional(),
   inputGovernanceMode: InputGovernanceModeSchema.default("v2"),
   daemon: z.object({

@@ -8,30 +8,36 @@ import type {
   ToolExecution,
 } from "../../types";
 import { localizeKnownRuntimeMessage } from "../../../../lib/error-copy";
+import { tr } from "../../../../lib/app-language";
 
 const NULL_BOOK_KEY = "__null__";
 
-const AGENT_LABELS: Record<string, string> = {
-  architect: "建书",
-  writer: "写作",
-  auditor: "审计",
-  reviser: "修订",
-  exporter: "导出",
+// [zh, en] tuples resolved through tr() at call time so labels follow the
+// current app language instead of the language active at module load.
+const AGENT_LABELS: Record<string, readonly [string, string]> = {
+  architect: ["建书", "Create book"],
+  writer: ["写作", "Write"],
+  auditor: ["审计", "Audit"],
+  reviser: ["修订", "Revise"],
+  exporter: ["导出", "Export"],
 };
 
-const TOOL_LABELS: Record<string, string> = {
-  read: "读取文件",
-  edit: "编辑文件",
-  grep: "搜索",
-  ls: "列目录",
-  context_compression: "整理上下文",
-  propose_action: "确认动作",
-  short_fiction_run: "短篇生产",
-  generate_cover: "生成封面",
-  play_edit: "编辑互动世界",
-  play_start: "启动互动世界",
-  play_revise: "重做互动回合",
-  play_step: "推进互动世界",
+const TOOL_LABELS: Record<string, readonly [string, string]> = {
+  read: ["读取文件", "Read file"],
+  edit: ["编辑文件", "Edit file"],
+  grep: ["搜索", "Search"],
+  ls: ["列目录", "List directory"],
+  context_compression: ["整理上下文", "Organize context"],
+  propose_action: ["确认动作", "Confirm action"],
+  short_fiction_run: ["短篇生产", "Short fiction run"],
+  generate_cover: ["生成封面", "Generate cover"],
+  script_create: ["剧本创作", "Create script"],
+  storyboard_create: ["分镜创作", "Create storyboard"],
+  interactive_film_create: ["互动影游", "Interactive film"],
+  play_edit: ["编辑互动世界", "Edit interactive world"],
+  play_start: ["启动互动世界", "Start interactive world"],
+  play_revise: ["重做互动回合", "Redo play turn"],
+  play_step: ["推进互动世界", "Advance interactive world"],
 };
 
 export function bookKey(bookId: string | null | undefined): string {
@@ -44,8 +50,12 @@ export function extractErrorMessage(error: string | { code?: string; message?: s
 }
 
 export function resolveToolLabel(tool: string, agent?: string): string {
-  if (tool === "sub_agent" && agent) return AGENT_LABELS[agent] ?? agent;
-  return TOOL_LABELS[tool] ?? tool;
+  if (tool === "sub_agent" && agent) {
+    const label = AGENT_LABELS[agent];
+    return label ? tr(label[0], label[1]) : agent;
+  }
+  const label = TOOL_LABELS[tool];
+  return label ? tr(label[0], label[1]) : tool;
 }
 
 export function summarizeResult(result: unknown): string {
@@ -148,6 +158,30 @@ export function deriveFlat(
   };
 }
 
+export function withToolExecutions(
+  message: Message,
+  executions: ReadonlyArray<ToolExecution>,
+): Message {
+  if (executions.length === 0) return message;
+  const existingIds = new Set((message.toolExecutions ?? []).map((execution) => execution.id));
+  const missing = executions.filter((execution) => !existingIds.has(execution.id));
+  if (missing.length === 0) return message;
+
+  const currentParts = message.parts ?? (message.content ? [{ type: "text" as const, content: message.content }] : []);
+  const nonTextParts = currentParts.filter((part) => part.type !== "text");
+  const textParts = currentParts.filter((part) => part.type === "text");
+  const parts: MessagePart[] = [
+    ...nonTextParts,
+    ...missing.map((execution) => ({ type: "tool" as const, execution })),
+    ...textParts,
+  ];
+  return {
+    ...message,
+    ...deriveFlat(parts),
+    parts,
+  };
+}
+
 export function createSessionRuntime(input: {
   sessionId: string;
   bookId: string | null;
@@ -166,6 +200,7 @@ export function createSessionRuntime(input: {
     messages: input.messages ?? [],
     stream: null,
     isStreaming: false,
+    isChatStreaming: false,
     lastError: null,
     isDraft: input.isDraft ?? false,
   };
@@ -177,7 +212,7 @@ export function deserializeMessages(
   return msgs
     .filter((message) => message.role === "user" || message.role === "assistant")
     .map((message) => {
-      const toolExecutions = (message as any).toolExecutions as ToolExecution[] | undefined;
+      const toolExecutions = extractSessionToolExecutions(message);
       const parts: MessagePart[] = [];
       if (message.thinking) parts.push({ type: "thinking", content: message.thinking, streaming: false });
       if (toolExecutions) {
@@ -197,6 +232,140 @@ export function deserializeMessages(
     });
 }
 
+export function mergeTaskExecution(
+  messages: ReadonlyArray<Message>,
+  taskExecution: ToolExecution,
+): ReadonlyArray<Message> {
+  // 任务快照必然来自后台生产任务：恢复出的卡带 background 标记，供无 id
+  // 事件的回退路由跳过它。终态快照替换整个 execution，标记也要跟着补回来。
+  const execution: ToolExecution = taskExecution.background
+    ? taskExecution
+    : { ...taskExecution, background: true };
+  let found = false;
+  const next = messages.map((message) => {
+    const hasDirectExecution = message.toolExecutions?.some((item) => item.id === execution.id) ?? false;
+    const hasPartExecution = message.parts?.some(
+      (part) => part.type === "tool" && part.execution.id === execution.id,
+    ) ?? false;
+    if (!hasDirectExecution && !hasPartExecution) return message;
+
+    found = true;
+    const toolExecutions = hasDirectExecution
+      ? message.toolExecutions?.map((item) => item.id === execution.id ? execution : item)
+      : [...(message.toolExecutions ?? []), execution];
+    const parts = hasPartExecution
+      ? message.parts?.map((part) => (
+          part.type === "tool" && part.execution.id === execution.id
+            ? { type: "tool" as const, execution }
+            : part
+        ))
+      : [...(message.parts ?? []), { type: "tool" as const, execution }];
+    return { ...message, toolExecutions, parts };
+  });
+
+  if (found) return next;
+  return [
+    ...next,
+    {
+      role: "assistant",
+      content: "",
+      timestamp: execution.startedAt,
+      toolExecutions: [execution],
+      parts: [{ type: "tool", execution }],
+    },
+  ];
+}
+
+export function hasInFlightExecution(
+  messages: ReadonlyArray<Message>,
+  executionId: string,
+): boolean {
+  const inFlight = (execution: ToolExecution): boolean =>
+    execution.id === executionId
+    && (execution.status === "running" || execution.status === "processing");
+
+  return messages.some((message) =>
+    (message.toolExecutions?.some(inFlight) ?? false)
+    || (message.parts?.some((part) => part.type === "tool" && inFlight(part.execution)) ?? false),
+  );
+}
+
+/**
+ * 消息里是否还有任何 running/processing 的工具执行。
+ * 聊天轮结束时用它判断"后台生产任务是否还在跑"：只有全部执行都到终态，
+ * 才允许关闭 SSE 连接并把 isStreaming 置回 false。
+ */
+export function hasAnyInFlightExecution(messages: ReadonlyArray<Message>): boolean {
+  const inFlight = (execution: ToolExecution): boolean =>
+    execution.status === "running" || execution.status === "processing";
+
+  return messages.some((message) =>
+    (message.toolExecutions?.some(inFlight) ?? false)
+    || (message.parts?.some((part) => part.type === "tool" && inFlight(part.execution)) ?? false),
+  );
+}
+
+/**
+ * 按 execution id 在全部消息里定位工具卡并更新（并行聊天时任务卡挂在更早的
+ * 任务轮消息上，不能只在当前 streamTs 的消息里找）。找不到时返回 null。
+ */
+export function updateToolPartById(
+  messages: ReadonlyArray<Message>,
+  executionId: string,
+  update: (execution: ToolExecution) => ToolExecution,
+): ReadonlyArray<Message> | null {
+  let found = false;
+  const next = messages.map((message) => {
+    const hasPart = message.parts?.some(
+      (part) => part.type === "tool" && part.execution.id === executionId,
+    ) ?? false;
+    if (!hasPart) return message;
+    found = true;
+    const parts = (message.parts ?? []).map((part) => (
+      part.type === "tool" && part.execution.id === executionId
+        ? { type: "tool" as const, execution: update(part.execution) }
+        : part
+    ));
+    return { ...message, ...deriveFlat(parts), parts };
+  });
+  return found ? next : null;
+}
+
+export function markRunningToolsFailed(
+  messages: ReadonlyArray<Message>,
+  error: string,
+  completedAt = Date.now(),
+): ReadonlyArray<Message> {
+  const failExecution = (execution: ToolExecution): ToolExecution => (
+    execution.status === "running" || execution.status === "processing"
+      ? { ...execution, status: "error", error, completedAt }
+      : execution
+  );
+
+  return messages.map((message) => ({
+    ...message,
+    ...(message.toolExecutions
+      ? { toolExecutions: message.toolExecutions.map(failExecution) }
+      : {}),
+    ...(message.parts
+      ? {
+          parts: message.parts.map((part) => (
+            part.type === "tool"
+              ? { ...part, execution: failExecution(part.execution) }
+              : part
+          )),
+        }
+      : {}),
+  }));
+}
+
+function extractSessionToolExecutions(message: SessionMessage): ToolExecution[] | undefined {
+  const direct = (message as any).toolExecutions;
+  if (Array.isArray(direct)) return direct as ToolExecution[];
+  const legacy = (message as any).legacyDisplay?.toolExecutions;
+  return Array.isArray(legacy) ? legacy as ToolExecution[] : undefined;
+}
+
 type ProposalResolution = "confirmed" | "rejected";
 
 function proposedActionFrom(exec: ToolExecution): string | null {
@@ -213,6 +382,9 @@ function completesProposedAction(exec: ToolExecution, action: string): boolean {
   if (action === "short_run") return exec.tool === "short_fiction_run";
   if (action === "play_start") return exec.tool === "play_start";
   if (action === "generate_cover") return exec.tool === "generate_cover";
+  if (action === "script_create") return exec.tool === "script_create";
+  if (action === "storyboard_create") return exec.tool === "storyboard_create";
+  if (action === "interactive_film_create") return exec.tool === "interactive_film_create";
   return false;
 }
 

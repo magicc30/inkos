@@ -56,7 +56,7 @@ describe("Layer 2 优先级（聚合入口精简后）", () => {
   });
 
   it("OpenRouter 专属带后缀 id（:free）命中 openrouter provider", () => {
-    const hit = lookupModel("custom", "google/gemma-2-9b-it:free");
+    const hit = lookupModel("custom", "meta-llama/llama-3.1-8b-instruct:free");
     expect(hit).toBeDefined();
     expect(hit?.maxOutput).toBe(4096);
   });

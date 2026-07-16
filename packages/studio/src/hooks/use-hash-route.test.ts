@@ -51,6 +51,10 @@ describe("hash route", () => {
       expect(parseHash("#/import/fanfic")).toEqual({ page: "import", tab: "fanfic" });
     });
 
+    it("parses #/translation", () => {
+      expect(parseHash("#/translation")).toEqual({ page: "translation" });
+    });
+
     it("decodes encoded serviceId", () => {
       expect(parseHash("#/services/%E8%87%AA%E5%AE%9A%E4%B9%89")).toEqual({ page: "service-detail", serviceId: "自定义" });
     });
@@ -103,6 +107,10 @@ describe("hash route", () => {
       expect(routeToHash({ page: "import", tab: "chapters" })).toBe("#/import/chapters");
     });
 
+    it("translation -> #/translation", () => {
+      expect(routeToHash({ page: "translation" })).toBe("#/translation");
+    });
+
     it("encodes Chinese serviceId", () => {
       const hash = routeToHash({ page: "service-detail", serviceId: "自定义" });
       expect(hash).toContain("#/services/");
@@ -113,5 +121,17 @@ describe("hash route", () => {
       expect(routeToHash({ page: "daemon" })).toBe("");
       expect(routeToHash({ page: "logs" })).toBe("");
     });
+  });
+});
+
+describe("play route", () => {
+  it("parses #/play/:id", () => {
+    expect(parseHash("#/play/my-id")).toEqual({ page: "play", projectId: "my-id" });
+  });
+  it("round-trips to hash", () => {
+    expect(routeToHash({ page: "play", projectId: "my-id" })).toBe("#/play/my-id");
+  });
+  it("decodes url-encoded ids", () => {
+    expect(parseHash("#/play/a%20b")).toEqual({ page: "play", projectId: "a b" });
   });
 });

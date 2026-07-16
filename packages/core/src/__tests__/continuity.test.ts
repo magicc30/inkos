@@ -84,8 +84,10 @@ describe("ContinuityAuditor", () => {
     const bookDir = join(root, "book");
     const storyDir = join(bookDir, "story");
     await mkdir(storyDir, { recursive: true });
+    await mkdir(join(root, "prompt", "longform"), { recursive: true });
 
     await Promise.all([
+      writeFile(join(root, "prompt", "longform", "auditor.md"), "PROJECT AUDITOR OVERRIDE", "utf-8"),
       writeFile(
         join(bookDir, "book.json"),
         JSON.stringify({
@@ -146,6 +148,7 @@ describe("ContinuityAuditor", () => {
       const systemPrompt = messages?.[0]?.content ?? "";
 
       expect(systemPrompt).toContain("ALL OUTPUT MUST BE IN ENGLISH");
+      expect(systemPrompt).toContain("PROJECT AUDITOR OVERRIDE");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

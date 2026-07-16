@@ -95,6 +95,35 @@ describe("StateManager", () => {
       expect(loaded).toEqual([]);
     });
 
+    it("rebuilds the chapter index from chapter files when index.json is empty", async () => {
+      const bookDir = manager.bookDir("rebuild-book");
+      await mkdir(join(bookDir, "chapters"), { recursive: true });
+      await writeFile(join(bookDir, "chapters", "index.json"), "[]", "utf-8");
+      await writeFile(join(bookDir, "chapters", "0001_雨棚.md"), "# 第1章 雨棚\n\n正文。", "utf-8");
+      await writeFile(join(bookDir, "chapters", "0002_账页.md"), "# 第2章 账页\n\n正文。", "utf-8");
+
+      const loaded = await manager.loadChapterIndex("rebuild-book");
+
+      expect(loaded.map((chapter) => chapter.number)).toEqual([1, 2]);
+      expect(loaded[0]).toMatchObject({
+        title: "雨棚",
+        status: "ready-for-review",
+      });
+    });
+
+    it("does not save an empty chapter index over existing chapter files", async () => {
+      const bookDir = manager.bookDir("protect-empty-index");
+      await mkdir(join(bookDir, "chapters"), { recursive: true });
+      await writeFile(join(bookDir, "chapters", "0001_雨棚.md"), "# 第1章 雨棚\n\n正文。", "utf-8");
+
+      await manager.saveChapterIndex("protect-empty-index", []);
+
+      const raw = await readFile(join(bookDir, "chapters", "index.json"), "utf-8");
+      const parsed = JSON.parse(raw) as Array<{ number: number; title: string }>;
+      expect(parsed.map((chapter) => chapter.number)).toEqual([1]);
+      expect(parsed[0]?.title).toBe("雨棚");
+    });
+
     it("creates the chapters directory on save", async () => {
       await manager.saveChapterIndex("book-b", []);
       const dirStat = await stat(
@@ -647,6 +676,27 @@ describe("StateManager", () => {
       await release();
     });
 
+    it("does not let another StateManager in the same process reclaim an active lock", async () => {
+      const bookId = "lock-book-shared-process";
+      const otherManager = new StateManager(tempDir);
+      await mkdir(manager.bookDir(bookId), { recursive: true });
+
+      const release = await manager.acquireBookLock(bookId);
+      let competingRelease: (() => Promise<void>) | undefined;
+      try {
+        try {
+          competingRelease = await otherManager.acquireBookLock(bookId);
+        } catch (error) {
+          expect(error).toMatchObject({ code: "BOOK_BUSY" });
+          expect(String(error)).toContain(bookId);
+        }
+        expect(competingRelease).toBeUndefined();
+      } finally {
+        await competingRelease?.();
+        await release();
+      }
+    });
+
     it("allows re-acquiring lock after release", async () => {
       await mkdir(manager.bookDir("lock-book-3"), { recursive: true });
 
@@ -688,8 +738,9 @@ describe("StateManager", () => {
       const release = await manager.acquireBookLock("lock-book-self");
       expect(typeof release).toBe("function");
 
-      const lockData = await readFile(lockPath, "utf-8");
-      expect(lockData).toContain(`pid:${process.pid}`);
+      const lockData = JSON.parse(await readFile(lockPath, "utf-8")) as { pid: number; token: string };
+      expect(lockData.pid).toBe(process.pid);
+      expect(lockData.token).toBeTruthy();
 
       await release();
     });
@@ -710,14 +761,64 @@ describe("StateManager", () => {
 
       try {
         const release = await manager.acquireBookLock("lock-book-5");
-        const lockData = await readFile(lockPath, "utf-8");
+        const lockData = JSON.parse(await readFile(lockPath, "utf-8")) as { pid: number; token: string };
 
         expect(typeof release).toBe("function");
-        expect(lockData).toContain(`pid:${process.pid}`);
+        expect(lockData.pid).toBe(process.pid);
+        expect(lockData.token).toBeTruthy();
 
         await release();
       } finally {
         killSpy.mockRestore();
+      }
+    });
+
+    it("reclaims an expired lease whose recorded pid was reused by another live process", async () => {
+      const bookId = "lock-book-expired-lease";
+      await mkdir(manager.bookDir(bookId), { recursive: true });
+      const lockPath = join(manager.bookDir(bookId), ".write.lock");
+      const oldTimestamp = Date.now() - 10 * 60_000;
+      await writeFile(lockPath, JSON.stringify({
+        version: 1,
+        pid: 424243,
+        token: "abandoned-owner",
+        startedAt: oldTimestamp,
+        heartbeatAt: oldTimestamp,
+      }), "utf-8");
+
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      try {
+        const release = await manager.acquireBookLock(bookId);
+        const lockData = JSON.parse(await readFile(lockPath, "utf-8")) as {
+          pid: number;
+          token: string;
+        };
+
+        expect(lockData.pid).toBe(process.pid);
+        expect(lockData.token).not.toBe("abandoned-owner");
+        await release();
+      } finally {
+        killSpy.mockRestore();
+      }
+    });
+
+    it("refreshes the lease heartbeat while a write remains active", async () => {
+      vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+      const bookId = "lock-book-heartbeat";
+      let release: (() => Promise<void>) | undefined;
+      try {
+        release = await manager.acquireBookLock(bookId);
+        const lockPath = join(manager.bookDir(bookId), ".write.lock");
+        const before = JSON.parse(await readFile(lockPath, "utf-8")) as { heartbeatAt: number };
+
+        await vi.advanceTimersByTimeAsync(31_000);
+        await new Promise((resolveHeartbeat) => setTimeout(resolveHeartbeat, 10));
+
+        const after = JSON.parse(await readFile(lockPath, "utf-8")) as { heartbeatAt: number };
+        expect(after.heartbeatAt).toBeGreaterThan(before.heartbeatAt);
+      } finally {
+        await release?.();
+        vi.useRealTimers();
       }
     });
   });

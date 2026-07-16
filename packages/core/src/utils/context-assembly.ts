@@ -89,6 +89,10 @@ export function buildGovernedTrace(params: {
   readonly contextPackage: ContextPackage;
   readonly composerInputs: ReadonlyArray<string>;
   readonly notes?: ReadonlyArray<string>;
+  readonly usedSkills?: ReadonlyArray<string>;
+  readonly promptPacks?: ReadonlyArray<string>;
+  readonly contextNeeds?: ReadonlyArray<string>;
+  readonly compression?: ChapterTrace["compression"];
 }): ChapterTrace {
   const protectedEntries = params.contextPackage.selectedContext.filter((entry) =>
     isProtectedContextSource(entry.source),
@@ -104,6 +108,9 @@ export function buildGovernedTrace(params: {
     plannerInputs: params.plan.plannerInputs,
     composerInputs: params.composerInputs,
     selectedSources: params.contextPackage.selectedContext.map((entry) => entry.source),
+    usedSkills: params.usedSkills ?? [],
+    promptPacks: params.promptPacks ?? [],
+    contextNeeds: params.contextNeeds ?? [],
     contextTiers: {
       protectedSources: protectedEntries.map((entry) => entry.source),
       compressibleSources: compressibleEntries.map((entry) => entry.source),
@@ -113,6 +120,7 @@ export function buildGovernedTrace(params: {
       compressibleTokens,
       totalSelectedTokens: protectedTokens + compressibleTokens,
     },
+    ...(params.compression ? { compression: params.compression } : {}),
     notes: params.notes ?? [],
   });
 }

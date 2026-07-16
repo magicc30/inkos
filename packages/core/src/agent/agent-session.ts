@@ -8,6 +8,7 @@ import type {
   AssistantMessage,
   AssistantMessageEventStream,
   Context as PiContext,
+  ImageContent,
   Message,
   SimpleStreamOptions,
   ToolResultMessage,
@@ -32,7 +33,21 @@ import {
   createPlayStartTool,
   createPlayStepTool,
   createProposeActionTool,
+  createScriptCreationTool,
+  createStoryboardCreationTool,
+  createInteractiveFilmCreationTool,
+  createTranslationCreateTool,
+  createResearchWebTool,
+  createIngestMaterialTool,
+  createRetrieveMaterialTool,
+  createImportChaptersTool,
 } from "./agent-tools.js";
+import { createFilmAuthoringTools, filmLLMDepsFromClient } from "./film-authoring-tools.js";
+import {
+  createNarrativeForecastCreateTool,
+  createNarrativeForecastGetTool,
+  createNarrativeForecastSelectTool,
+} from "./forecast-tools.js";
 import { createBookContextTransform } from "./context-transform.js";
 import {
   appendTranscriptEvents,
@@ -48,8 +63,10 @@ import type { TranscriptEvent, TranscriptRole } from "../interaction/session-tra
 import type { PlayMode, SessionKind } from "../interaction/session.js";
 import type { ActionPayload, ActionSource, RequestedIntent } from "../interaction/action-envelope.js";
 import type { ContextCompressionCallback } from "../models/context-compression.js";
+import { createSkillRegistry, loadConfiguredCapabilitySkills } from "../skills/index.js";
 import { assertSafeBookId } from "../utils/book-id.js";
 import { PlayStore } from "../play/play-store.js";
+import { isLlmStubEnabled, stubAgentStream } from "./llm-stub.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -70,6 +87,10 @@ export interface AgentSessionConfig {
   requestedIntent?: RequestedIntent;
   /** Structured execution arguments confirmed by the UI/command surface. */
   actionPayload?: ActionPayload;
+  /** User/UI-forced capability skills for this turn, e.g. @open-world-play. */
+  requestedSkills?: ReadonlyArray<string>;
+  /** Capability skills explicitly disabled for this turn. */
+  disabledSkills?: ReadonlyArray<string>;
   /** Language for the system prompt. */
   language: string;
   /** PipelineRunner for sub-agent tool delegation. */
@@ -86,6 +107,24 @@ export interface AgentSessionConfig {
   onEvent?: (event: AgentEvent) => void;
   /** Optional listener for context compression lifecycle events. */
   onContextCompression?: ContextCompressionCallback;
+  /** Attachments uploaded with this user turn. Text is injected as protected user context; images use pi-ai ImageContent. */
+  attachments?: ReadonlyArray<AgentSessionAttachment>;
+  /**
+   * Status block for a production task running in the background of this session
+   * (e.g. a confirmed short-fiction run). Appended to the system prompt so the
+   * agent can answer progress questions instead of claiming nothing is running.
+   * Changing this value evicts the cached Agent so the prompt stays current.
+   */
+  backgroundTaskContext?: string;
+  /**
+   * Remove book/artifact-mutating production tools from this turn's tool table
+   * (a confirmed production task is already running in this session, so a
+   * parallel chat turn must not mutate the same book concurrently). Read-style
+   * tools, research/material tools, and propose_action stay available —
+   * confirmed actions started via propose_action are gated host-side anyway.
+   * Changing this value evicts the cached Agent so the tool table stays current.
+   */
+  suppressProductionTools?: boolean;
 }
 
 export interface AgentSessionResult {
@@ -95,6 +134,19 @@ export interface AgentSessionResult {
   messages: AgentMessage[];
   /** Upstream model error surfaced by pi-agent-core, if the final assistant turn failed. */
   errorMessage?: string;
+}
+
+export interface AgentSessionAttachment {
+  readonly id: string;
+  readonly filename: string;
+  readonly mimeType: string;
+  readonly size: number;
+  readonly storedPath?: string;
+  readonly text?: string;
+  readonly image?: {
+    readonly data: string;
+    readonly mimeType: string;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -110,11 +162,14 @@ interface CachedAgent {
   actionSource: NonNullable<AgentSessionConfig["actionSource"]>;
   requestedIntent: AgentSessionConfig["requestedIntent"];
   actionPayloadKey: string;
+  skillResolutionKey: string;
   playWorldExists: boolean;
   language: string;
   modelIdentity: string;
   apiKey: string | undefined;
   allowSystemFileRead: boolean;
+  backgroundTaskContext: string | undefined;
+  suppressProductionTools: boolean;
   lastCommittedSeq: number;
   lastActive: number;
 }
@@ -197,12 +252,78 @@ function actionPayloadCacheKey(payload: ActionPayload | undefined): string {
   return payload ? JSON.stringify(payload) : "";
 }
 
+function skillResolutionCacheKey(value: {
+  readonly usedSkills: ReadonlyArray<{
+    readonly id: string;
+    readonly source?: string;
+    readonly whenToUse?: string;
+    readonly promptPacks?: ReadonlyArray<string>;
+    readonly body?: string;
+  }>;
+  readonly forcedSkillIds: ReadonlyArray<string>;
+  readonly missingSkillIds: ReadonlyArray<string>;
+  readonly disabledSkillIds: ReadonlyArray<string>;
+}): string {
+  return JSON.stringify({
+    used: value.usedSkills.map((skill) => ({
+      id: skill.id,
+      source: skill.source,
+      whenToUse: skill.whenToUse,
+      promptPacks: skill.promptPacks ?? [],
+      body: skill.body ?? "",
+    })),
+    forced: value.forcedSkillIds,
+    missing: value.missingSkillIds,
+    disabled: value.disabledSkillIds,
+  });
+}
+
 function sessionQueueKey(projectRoot: string, sessionId: string): string {
   return `${projectRoot}\0${sessionId}`;
 }
 
 function agentCacheKey(projectRoot: string, sessionId: string): string {
   return sessionQueueKey(projectRoot, sessionId);
+}
+
+function buildAttachmentUserBlock(attachments: ReadonlyArray<AgentSessionAttachment> | undefined, language: string): string {
+  if (!attachments?.length) return "";
+  const isEn = language === "en";
+  const lines = [
+    isEn
+      ? "\n\n## Uploaded Files (host-provided, user-authorized)"
+      : "\n\n## 用户上传文件（宿主已接收，用户授权本轮使用）",
+  ];
+  for (const attachment of attachments) {
+    lines.push(`\n### ${attachment.filename}`);
+    lines.push(`- id: ${attachment.id}`);
+    lines.push(`- mime: ${attachment.mimeType || "application/octet-stream"}`);
+    lines.push(`- size: ${attachment.size}`);
+    if (attachment.storedPath) lines.push(`- stored_path: ${attachment.storedPath}`);
+    if (attachment.text) {
+      lines.push(isEn ? "\nContent:" : "\n内容：");
+      lines.push("```");
+      lines.push(attachment.text);
+      lines.push("```");
+    } else if (attachment.image) {
+      lines.push(isEn ? "- image: attached as multimodal input" : "- 图片：已作为多模态输入附加");
+    } else {
+      lines.push(isEn
+        ? "- content: stored only; no extractor is available for this MIME type yet"
+        : "- 内容：已保存；当前 MIME 类型暂未配置文本抽取器");
+    }
+  }
+  return lines.join("\n");
+}
+
+function attachmentImages(attachments: ReadonlyArray<AgentSessionAttachment> | undefined): ImageContent[] {
+  return (attachments ?? [])
+    .filter((attachment) => attachment.image)
+    .map((attachment) => ({
+      type: "image",
+      data: attachment.image!.data,
+      mimeType: attachment.image!.mimeType,
+    }));
 }
 
 function guardedStreamSimple<TApi extends Api>(
@@ -243,15 +364,21 @@ function localAssistantStopStream(model: Model<Api>): AssistantMessageEventStrea
   return stream;
 }
 
-function isTerminalProductionToolName(toolName: unknown): boolean {
+export function isTerminalProductionToolName(toolName: unknown): boolean {
   return toolName === "propose_action"
     || toolName === "sub_agent"
     || toolName === "short_fiction_run"
+    || toolName === "script_create"
+    || toolName === "storyboard_create"
+    || toolName === "interactive_film_create"
     || toolName === "generate_cover"
     || toolName === "play_start"
     || toolName === "play_edit"
     || toolName === "play_revise"
-    || toolName === "play_step";
+    || toolName === "play_step"
+    || toolName === "create_narrative_forecast"
+    || toolName === "get_narrative_forecast"
+    || toolName === "select_narrative_branch";
 }
 
 function hasUnansweredTerminalToolResult(messages: AgentMessage[]): boolean {
@@ -401,13 +528,29 @@ function extractTextFromAssistant(msg: AssistantMessage): string {
 function looksLikeUnsavedChapterProse(text: string): boolean {
   const trimmed = text.trim();
   if (trimmed.length < 800) return false;
+  if (looksLikeChapterRevisionPlan(trimmed)) return false;
   return /(^|\n)\s{0,3}#{1,3}\s*(?:第\s*[0-9一二三四五六七八九十百千]+\s*章|Chapter\s+\d+)/i.test(trimmed);
+}
+
+function looksLikeChapterRevisionPlan(text: string): boolean {
+  const headingLines = text
+    .split(/\n+/)
+    .filter((line) => /^\s{0,3}#{1,3}\s*(?:第\s*[0-9一二三四五六七八九十百千]+\s*章|Chapter\s+\d+)/i.test(line))
+    .slice(0, 8);
+  if (headingLines.length === 0) return false;
+  const planSignals = [
+    /修改指令|修订指令|重写指令|执行指令|改稿指令|具体修改|修改方案|修订方案|重写方案/,
+    /问题|目标|处理方式|调整|建议|要求|保留|删除|新增|强化|弱化/,
+    /revision brief|revision plan|rewrite plan|edit instruction|actionable instruction|change request/i,
+  ];
+  return headingLines.some((line) => planSignals.some((signal) => signal.test(line)))
+    || planSignals.some((signal) => signal.test(text.slice(0, 1200)));
 }
 
 function bookRawChapterBoundaryText(language: string): string {
   return language === "zh"
-    ? "这次模型输出了章节正文样式的聊天文本，但没有落盘。写下一章必须调用 sub_agent(agent=\"writer\")，由写作管线生成并保存章节。请重新发送“继续写下一章”，系统会走 writer 工具。"
-    : "The model produced chapter-like prose in chat, but nothing was saved. Writing the next chapter must call sub_agent(agent=\"writer\") so the writing pipeline generates and persists it. Please ask to continue again and the system will use the writer tool.";
+    ? "这次模型输出了疑似章节正文的聊天文本，但没有调用落盘工具。InkOS 不会把聊天正文当成已保存章节：如果要续写新章，请发送“继续写下一章”；如果要修改旧章，请发送“重写/修订第 N 章 + 具体要求”，系统会走 reviser/writer 管线落盘。"
+    : "The model produced chapter-like prose in chat without calling a persistence tool. InkOS will not treat chat prose as a saved chapter. Ask to write the next chapter only when you want to append; ask to rewrite/revise chapter N with concrete requirements when you want to change existing chapters.";
 }
 
 function replaceAssistantText(message: AssistantMessage, text: string): void {
@@ -620,6 +763,21 @@ function agentMessagesToPlain(
 // Main entry point
 // ---------------------------------------------------------------------------
 
+/**
+ * 会创建/修改书籍与产物的生产工具。suppressProductionTools 为 true（同会话
+ * 有后台生产任务在运行）时从工具表剔除；read/grep/ls、research/material 与
+ * propose_action 保留——propose_action 引发的确认任务在 host 侧另有单任务闸门。
+ */
+const PRODUCTION_MUTATION_TOOL_NAMES = new Set([
+  "sub_agent",
+  "generate_cover",
+  "write_truth_file",
+  "rename_entity",
+  "patch_chapter_text",
+  "replace_chapter_text",
+  "import_chapters",
+]);
+
 function createAgentToolsForMode(params: {
   readonly pipeline: PipelineRunner;
   readonly bookId: string | null;
@@ -634,11 +792,18 @@ function createAgentToolsForMode(params: {
   readonly playMode?: "open" | "guided";
   readonly playWorldExists: boolean;
 }) {
-  const subAgentTool = createSubAgentTool(params.pipeline, params.bookId, params.projectRoot, { actionPayload: params.actionPayload });
   const lang = params.language === "en" ? "en" : "zh";
+  const subAgentTool = createSubAgentTool(params.pipeline, params.bookId, params.projectRoot, {
+    actionPayload: params.actionPayload,
+    language: lang,
+  });
   const proposalTool = createProposeActionTool(lang, {
     sameSession: params.sessionKind !== "chat",
   });
+  const researchTool = createResearchWebTool(params.projectRoot);
+  const materialTool = createIngestMaterialTool(params.projectRoot);
+  const materialRetrievalTool = createRetrieveMaterialTool(params.projectRoot);
+  const importChaptersTool = createImportChaptersTool(params.pipeline, params.bookId, params.projectRoot);
   const isConfirmed = (
     intent: NonNullable<AgentSessionConfig["requestedIntent"]>,
   ): boolean => {
@@ -647,18 +812,60 @@ function createAgentToolsForMode(params: {
   };
 
   if (params.sessionKind === "chat") {
-    return [proposalTool];
+    if (isConfirmed("translation_create")) {
+      return [createTranslationCreateTool(params.projectRoot, { actionPayload: params.actionPayload })];
+    }
+    return [proposalTool, researchTool, materialTool, materialRetrievalTool, importChaptersTool];
   }
 
   if (params.sessionKind === "short") {
     if (isConfirmed("short_run")) {
-      return [createShortFictionRunTool(params.pipeline, params.projectRoot, { actionPayload: params.actionPayload })];
+      return [createShortFictionRunTool(params.pipeline, params.projectRoot, { actionPayload: params.actionPayload, language: lang })];
     }
     if (isConfirmed("generate_cover")) {
       return [createGenerateCoverTool(params.projectRoot, { actionPayload: params.actionPayload })];
     }
-    return [proposalTool];
+    return [proposalTool, materialTool, materialRetrievalTool];
   }
+
+  if (params.sessionKind === "script") {
+    if (isConfirmed("script_create")) {
+      return [createScriptCreationTool(params.pipeline, params.projectRoot, { actionPayload: params.actionPayload, language: lang })];
+    }
+    return [proposalTool, materialTool, materialRetrievalTool];
+  }
+
+  if (params.sessionKind === "storyboard") {
+    if (isConfirmed("storyboard_create")) {
+      return [createStoryboardCreationTool(params.pipeline, params.projectRoot, { actionPayload: params.actionPayload, language: lang })];
+    }
+    return [proposalTool, materialTool, materialRetrievalTool];
+  }
+
+  if (params.sessionKind === "interactive-film") {
+    if (isConfirmed("interactive_film_create")) {
+      return [createInteractiveFilmCreationTool(params.pipeline, params.projectRoot, { actionPayload: params.actionPayload, language: lang })];
+    }
+    return [proposalTool, materialTool, materialRetrievalTool];
+  }
+
+  if (params.sessionKind === "interactive-film-authoring") {
+    const projectId = params.bookId;
+    if (!projectId) {
+      throw new Error("interactive-film-authoring session requires a non-null bookId");
+    }
+    const agentCtx = params.pipeline.createAgentContext("film-authoring", projectId);
+    const llm = filmLLMDepsFromClient(agentCtx.client, agentCtx.model);
+    return createFilmAuthoringTools({
+      projectRoot: params.projectRoot,
+      projectId,
+      llm,
+      proposeActionTool: proposalTool,
+      confirmedIntent: params.requestedIntent,
+      language: lang,
+    });
+  }
+
 
   if (params.sessionKind === "play") {
     if (isConfirmed("play_start")) {
@@ -666,12 +873,14 @@ function createAgentToolsForMode(params: {
     }
     if (params.playWorldExists) {
       return [
-        createPlayEditTool(params.projectRoot, params.sessionId),
-        createPlayReviseTool(params.pipeline, params.projectRoot, params.sessionId),
-        createPlayStepTool(params.pipeline, params.projectRoot, params.sessionId),
+        createPlayEditTool(params.projectRoot, params.sessionId, lang),
+        createPlayReviseTool(params.pipeline, params.projectRoot, params.sessionId, { language: lang }),
+        createPlayStepTool(params.pipeline, params.projectRoot, params.sessionId, { language: lang }),
+        materialTool,
+        materialRetrievalTool,
       ];
     }
-    return [proposalTool];
+    return [proposalTool, materialTool, materialRetrievalTool];
   }
 
   if (params.sessionKind === "book-create" && !params.bookId) {
@@ -679,9 +888,10 @@ function createAgentToolsForMode(params: {
       return [createSubAgentTool(params.pipeline, params.bookId, params.projectRoot, {
         actionPayload: params.actionPayload,
         architectCreateOnly: true,
+        language: lang,
       })];
     }
-    return [proposalTool];
+    return [proposalTool, researchTool, materialTool, materialRetrievalTool];
   }
 
   if (!params.bookId) {
@@ -696,12 +906,29 @@ function createAgentToolsForMode(params: {
     createRenameEntityTool(params.pipeline, params.projectRoot, params.bookId),
     createPatchChapterTextTool(params.pipeline, params.projectRoot, params.bookId),
     createReplaceChapterTextTool(params.pipeline, params.projectRoot, params.bookId),
+    researchTool,
+    materialTool,
+    materialRetrievalTool,
+    importChaptersTool,
+    createNarrativeForecastCreateTool(params.pipeline, params.bookId, params.projectRoot),
+    createNarrativeForecastGetTool(params.bookId, params.projectRoot),
+    createNarrativeForecastSelectTool(params.bookId, params.projectRoot),
     createGrepTool(params.projectRoot),
     createLsTool(params.projectRoot),
   ];
 
   if (params.sessionKind === "edit") {
-    return bookTools.filter((tool) => tool.name !== "sub_agent" && tool.name !== "generate_cover");
+    // Edit mode stays deterministic: forecast create runs an LLM projection,
+    // and get/select belong to the planning workflow, not text editing.
+    return bookTools.filter((tool) => ![
+      "sub_agent",
+      "generate_cover",
+      "research_web",
+      "import_chapters",
+      "create_narrative_forecast",
+      "get_narrative_forecast",
+      "select_narrative_branch",
+    ].includes(tool.name));
   }
 
   return bookTools;
@@ -742,9 +969,18 @@ async function runAgentSessionUnlocked(
   const requestedIntent = config.requestedIntent;
   const actionPayload = config.actionPayload;
   const actionPayloadKey = actionPayloadCacheKey(actionPayload);
+  const configuredSkills = await loadConfiguredCapabilitySkills({ projectRoot });
+  const skillResolution = createSkillRegistry({ skills: configuredSkills.skills }).resolveSkills({
+    requestedSkills: config.requestedSkills,
+    disabledSkills: config.disabledSkills,
+    sessionKind,
+    instruction: userMessage,
+  });
+  const skillResolutionKey = skillResolutionCacheKey(skillResolution);
   const model = resolveModel(config.model);
   const requestedModelIdentity = agentModelIdentity(model);
   const allowSystemFileRead = config.allowSystemFileRead ?? envFlagEnabled(process.env.INKOS_AGENT_ALLOW_SYSTEM_READ, false);
+  const suppressProductionTools = config.suppressProductionTools ?? false;
   const playWorldExists = sessionKind === "play"
     ? Boolean(await new PlayStore(projectRoot).loadWorld(sessionId))
     : false;
@@ -767,10 +1003,13 @@ async function runAgentSessionUnlocked(
     const actionSourceChanged = cached.actionSource !== actionSource;
     const requestedIntentChanged = cached.requestedIntent !== requestedIntent;
     const actionPayloadChanged = cached.actionPayloadKey !== actionPayloadKey;
+    const skillResolutionChanged = cached.skillResolutionKey !== skillResolutionKey;
     const languageChanged = cached.language !== language;
     const apiKeyChanged = cached.apiKey !== config.apiKey;
     const readPermissionChanged = cached.allowSystemFileRead !== allowSystemFileRead;
     const playWorldChanged = cached.playWorldExists !== playWorldExists;
+    const backgroundTaskContextChanged = cached.backgroundTaskContext !== config.backgroundTaskContext;
+    const suppressProductionToolsChanged = cached.suppressProductionTools !== suppressProductionTools;
     const transcriptChanged = cached.lastCommittedSeq !== currentCommittedSeq;
 
     if (
@@ -781,10 +1020,13 @@ async function runAgentSessionUnlocked(
       actionSourceChanged ||
       requestedIntentChanged ||
       actionPayloadChanged ||
+      skillResolutionChanged ||
       languageChanged ||
       apiKeyChanged ||
       readPermissionChanged ||
       playWorldChanged ||
+      backgroundTaskContextChanged ||
+      suppressProductionToolsChanged ||
       transcriptChanged
     ) {
       agentCache.delete(cacheKey);
@@ -819,24 +1061,35 @@ async function runAgentSessionUnlocked(
         ? plainToAgentMessages(initialMessages)
         : [];
     let terminalToolResultTail = false;
+    const baseSystemPrompt = buildAgentSystemPrompt(bookId, language, sessionKind, {
+      actionSource,
+      requestedIntent,
+      playWorldExists,
+      skills: skillResolution,
+    });
+    const agentTools = createAgentToolsForMode({
+      pipeline,
+      bookId,
+      sessionId,
+      sessionKind,
+      actionSource,
+      requestedIntent,
+      actionPayload,
+      projectRoot,
+      allowSystemFileRead,
+      language,
+      playMode,
+      playWorldExists,
+    });
     const agent = new Agent({
       initialState: {
         model,
-        systemPrompt: buildAgentSystemPrompt(bookId, language, sessionKind, { actionSource, requestedIntent, playWorldExists }),
-        tools: createAgentToolsForMode({
-          pipeline,
-          bookId,
-          sessionId,
-          sessionKind,
-          actionSource,
-          requestedIntent,
-          actionPayload,
-          projectRoot,
-          allowSystemFileRead,
-          language,
-          playMode,
-          playWorldExists,
-        }),
+        systemPrompt: config.backgroundTaskContext
+          ? `${baseSystemPrompt}\n\n${config.backgroundTaskContext}`
+          : baseSystemPrompt,
+        tools: suppressProductionTools
+          ? agentTools.filter((tool) => !PRODUCTION_MUTATION_TOOL_NAMES.has(tool.name))
+          : agentTools,
         messages: initialAgentMessages,
       },
       transformContext: createBookContextTransform(bookId, projectRoot, { onContextCompression }),
@@ -849,6 +1102,7 @@ async function runAgentSessionUnlocked(
           terminalToolResultTail = false;
           return localAssistantStopStream(streamModel);
         }
+        if (isLlmStubEnabled()) return stubAgentStream(streamModel, context);
         return guardedStreamSimple(streamModel, context, options);
       },
       getApiKey: (provider: string) => {
@@ -866,11 +1120,14 @@ async function runAgentSessionUnlocked(
       actionSource,
       requestedIntent,
       actionPayloadKey,
+      skillResolutionKey,
       playWorldExists,
       language,
       modelIdentity: requestedModelIdentity,
       apiKey: config.apiKey,
       allowSystemFileRead,
+      backgroundTaskContext: config.backgroundTaskContext,
+      suppressProductionTools,
       lastCommittedSeq: currentCommittedSeq ?? await latestCommittedSeq(projectRoot, sessionId),
       lastActive: Date.now(),
     };
@@ -880,6 +1137,9 @@ async function runAgentSessionUnlocked(
 
   cached.lastActive = Date.now();
   const { agent } = cached;
+  const attachmentBlock = buildAttachmentUserBlock(config.attachments, language);
+  const promptMessage = attachmentBlock ? `${userMessage}${attachmentBlock}` : userMessage;
+  const promptImages = attachmentImages(config.attachments);
 
   // ----- Prepare transcript persistence -----
   const requestId = randomUUID();
@@ -892,7 +1152,7 @@ async function runAgentSessionUnlocked(
     seq,
     timestamp: Date.now(),
     sessionKind,
-    input: userMessage,
+    input: promptMessage,
   }));
 
   let parentUuid: string | null = null;
@@ -961,7 +1221,11 @@ async function runAgentSessionUnlocked(
   let errorMessage: string | undefined;
 
   try {
-    await agent.prompt(userMessage);
+    if (promptImages.length > 0) {
+      await agent.prompt(promptMessage, promptImages);
+    } else {
+      await agent.prompt(promptMessage);
+    }
 
     finalAssistant = lastAssistantMessage(agent.state.messages);
     errorMessage = assistantErrorMessage(finalAssistant);
@@ -1030,4 +1294,17 @@ export function evictAgentCache(sessionId: string): boolean {
     deleted = true;
   }
   return deleted;
+}
+
+/** Abort an active cached pi-agent session and evict it from cache. */
+export function abortAgentSession(projectRoot: string, sessionId: string): boolean {
+  let aborted = false;
+  for (const [key, entry] of agentCache) {
+    if (entry.projectRoot !== projectRoot || entry.sessionId !== sessionId) continue;
+    entry.agent.abort();
+    entry.agent.clearAllQueues?.();
+    agentCache.delete(key);
+    aborted = true;
+  }
+  return aborted;
 }

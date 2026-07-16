@@ -18,7 +18,9 @@ export const OPENROUTER: InkosEndpoint = {
   group: "aggregator",
   api: "openai-responses",
   baseUrl: "https://openrouter.ai/api/v1",
-  checkModel: "google/gemma-2-9b-it:free",
+  // openrouter/auto 是 OpenRouter 官方的自动路由入口，长期存在；
+  // 具体模型 id（如 google/gemma-2-9b-it:free）会随上游下架失效（issue #300）。
+  checkModel: "openrouter/auto",
   temperatureRange: [0, 2],
   defaultTemperature: 0.7,
   writingTemperature: 1,
@@ -82,6 +84,5 @@ export const OPENROUTER: InkosEndpoint = {
     { id: "meta-llama/llama-3.3-70b-instruct:free", maxOutput: 4096, contextWindowTokens: 65536 },
     { id: "qwen/qwen-2-7b-instruct:free", maxOutput: 4096, contextWindowTokens: 32768 },
     { id: "meta-llama/llama-3.1-8b-instruct:free", maxOutput: 4096, contextWindowTokens: 131072 },
-    { id: "google/gemma-2-9b-it:free", maxOutput: 4096, contextWindowTokens: 8192 },
   ],
 };

@@ -11,21 +11,35 @@ export interface SearchResult {
   readonly snippet: string;
 }
 
+export interface WebSearchOptions {
+  readonly apiKey?: string;
+  readonly apiKeyEnv?: string;
+  readonly baseUrl?: string;
+}
+
 /**
  * Search the web via Tavily API.
  * Requires TAVILY_API_KEY environment variable.
  * Throws if key is not set — caller should catch and fall back to regular chat.
  */
-export async function searchWeb(query: string, maxResults = 5): Promise<ReadonlyArray<SearchResult>> {
-  const apiKey = process.env.TAVILY_API_KEY;
+export async function searchWeb(
+  query: string,
+  maxResults = 5,
+  options: WebSearchOptions = {},
+): Promise<ReadonlyArray<SearchResult>> {
+  const apiKey = options.apiKey
+    || (options.apiKeyEnv ? process.env[options.apiKeyEnv] : undefined)
+    || process.env.TAVILY_API_KEY;
   if (!apiKey) {
-    throw new Error("TAVILY_API_KEY not set. Set this env var to enable web search, or use OpenAI which has native search.");
+    throw new Error(`${options.apiKeyEnv ?? "TAVILY_API_KEY"} not set. Configure Studio research search or set the env var to enable web search.`);
   }
 
-  const res = await fetch("https://api.tavily.com/search", {
+  const endpoint = options.baseUrl?.trim() || "https://api.tavily.com/search";
+  const res = await fetch(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      "Authorization": `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
       api_key: apiKey,

@@ -17,8 +17,14 @@ export type HashRoute =
   | { page: "genres" }
   | { page: "style" }
   | { page: "import"; tab?: "import-text" | "chapters" | "canon" | "fanfic" | "spinoff" | "imitation" | "rewrite-style" }
+  | { page: "translation" }
   | { page: "radar" }
-  | { page: "doctor" };
+  | { page: "doctor" }
+  | { page: "play"; projectId: string }
+  | { page: "film"; projectId: string }
+  | { page: "flow"; projectId: string }
+  | { page: "film-author"; projectId: string }
+  | { page: "film-studio"; projectId: string };
 
 function parseHash(hash: string): HashRoute {
   const path = hash.replace(/^#\/?/, "");
@@ -29,7 +35,8 @@ function parseHash(hash: string): HashRoute {
   if (path === "settings") return { page: "project-settings" };
   if (path === "import") return { page: "import" };
   const importMatch = path.match(/^import\/(import-text|chapters|canon|fanfic|spinoff|imitation|rewrite-style)$/);
-  if (importMatch) return { page: "import", tab: importMatch[1] as "import-text" | "chapters" | "canon" | "fanfic" | "spinoff" | "imitation" };
+  if (path === "translation") return { page: "translation" };
+  if (importMatch) return { page: "import", tab: importMatch[1] as "import-text" | "chapters" | "canon" | "fanfic" | "spinoff" | "imitation" | "rewrite-style" };
   if (path === "book/new") return { page: "book-create" };
 
   const serviceMatch = path.match(/^services\/([^/]+)$/);
@@ -40,6 +47,21 @@ function parseHash(hash: string): HashRoute {
 
   const bookMatch = path.match(/^book\/([^/]+)$/);
   if (bookMatch) return { page: "book", bookId: decodeURIComponent(bookMatch[1]) };
+
+  const playMatch = path.match(/^play\/([^/]+)$/);
+  if (playMatch) return { page: "play", projectId: decodeURIComponent(playMatch[1]) };
+
+  const filmMatch = path.match(/^film\/([^/]+)$/);
+  if (filmMatch) return { page: "film", projectId: decodeURIComponent(filmMatch[1]) };
+
+  const flowMatch = path.match(/^flow\/([^/]+)$/);
+  if (flowMatch) return { page: "flow", projectId: decodeURIComponent(flowMatch[1]) };
+
+  const filmAuthorMatch = path.match(/^film-author\/([^/]+)$/);
+  if (filmAuthorMatch) return { page: "film-author", projectId: decodeURIComponent(filmAuthorMatch[1]) };
+
+  const studioFilmMatch = path.match(/^studio\/film\/([^/]+)$/);
+  if (studioFilmMatch) return { page: "film-studio", projectId: decodeURIComponent(studioFilmMatch[1]) };
 
   return { page: "dashboard" };
 }
@@ -53,15 +75,21 @@ function routeToHash(route: HashRoute): string {
     case "book-create": return "#/book/new";
     case "services": return "#/services";
     case "project-settings": return "#/settings";
+    case "translation": return "#/translation";
     case "import": return route.tab ? `#/import/${route.tab}` : "#/import";
     case "service-detail": return `#/services/${encodeURIComponent(route.serviceId)}`;
+    case "play": return `#/play/${encodeURIComponent(route.projectId)}`;
+    case "film": return `#/film/${encodeURIComponent(route.projectId)}`;
+    case "flow": return `#/flow/${encodeURIComponent(route.projectId)}`;
+    case "film-author": return `#/film-author/${encodeURIComponent(route.projectId)}`;
+    case "film-studio": return `#/studio/film/${encodeURIComponent(route.projectId)}`;
     default: return "";
   }
 }
 
 export { parseHash, routeToHash }; // for testing
 
-const HASH_PAGES = new Set(["dashboard", "chat", "book", "book-settings", "book-create", "services", "project-settings", "service-detail", "import"]);
+const HASH_PAGES = new Set(["dashboard", "chat", "book", "book-settings", "book-create", "services", "project-settings", "service-detail", "translation", "import", "play", "film", "flow", "film-author", "film-studio"]);
 
 export function useHashRoute() {
   const [route, setRouteState] = useState<HashRoute>(() => parseHash(window.location.hash));

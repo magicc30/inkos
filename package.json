@@ -1,16 +1,19 @@
 {
   "name": "inkos",
-  "version": "1.5.0",
+  "version": "1.7.0",
   "private": true,
-  "description": "Autonomous AI novel writing CLI agent — 10-agent pipeline that writes, audits, and revises novels with continuity tracking",
+  "description": "Story Creation AI Agent for long-form and short fiction, scripts, interactive games, and IP content",
   "keywords": [
+    "story-creation-ai-agent",
+    "story-agent",
     "ai-novel-writing",
     "ai-writing-agent",
     "novel-generator",
-    "autonomous-writing",
+    "interactive-fiction",
+    "ip-content",
+    "ai-storytelling",
     "litrpg",
     "progression-fantasy",
-    "multi-agent",
     "creative-writing-ai",
     "openclaw-skill",
     "cli"

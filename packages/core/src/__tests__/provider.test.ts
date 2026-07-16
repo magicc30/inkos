@@ -233,6 +233,18 @@ describe("chatCompletion via pi-ai", () => {
     expect(opts.maxTokens).toBe(256);
   });
 
+  it("passes the caller AbortSignal to pi-ai", async () => {
+    mockStreamSimple.mockReturnValue(makeTextStream("ok"));
+    const controller = new AbortController();
+
+    await chatCompletion(makeClient(), "test-model", [{ role: "user", content: "hi" }], {
+      signal: controller.signal,
+    });
+
+    const opts = mockStreamSimple.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(opts.signal).toBe(controller.signal);
+  });
+
   it("drops non-ByteString headers before calling pi-ai", async () => {
     mockStreamSimple.mockReturnValue(makeTextStream("ok"));
 
@@ -389,14 +401,18 @@ describe("chatCompletion via pi-ai", () => {
         },
       },
     });
-    const result = await chatCompletion(client, "deepseek-v4-flash", [{ role: "user", content: "nihao" }]);
+    const controller = new AbortController();
+    const result = await chatCompletion(client, "deepseek-v4-flash", [{ role: "user", content: "nihao" }], {
+      signal: controller.signal,
+    });
 
     expect(result.content).toBe("kkai ok");
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(mockCompleteSimple).not.toHaveBeenCalled();
     expect(mockStreamSimple).not.toHaveBeenCalled();
 
-    const init = fetchMock.mock.calls[0]?.[1] as { headers?: Record<string, string> };
+    const init = fetchMock.mock.calls[0]?.[1] as { headers?: Record<string, string>; signal?: AbortSignal };
+    expect(init.signal).toBe(controller.signal);
     expect(init.headers).toMatchObject({
       Authorization: "Bearer test-key",
       "Content-Type": "application/json",
@@ -970,5 +986,126 @@ describe("createLLMClient with providers lookup", () => {
     expect(client._piModel?.provider).toBe("google");
     expect(client._piModel?.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
     expect(client._piModel?.compat).toBeUndefined();
+  });
+});
+
+describe("stream interruption detection", () => {
+  beforeEach(() => {
+    // mockStreamSimple 是模块级共享 mock，清掉前面测试累积的调用计数和队列
+    mockStreamSimple.mockClear();
+  });
+
+  function sseResponse(sse: string) {
+    const encoder = new TextEncoder();
+    return {
+      ok: true,
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(sse));
+          controller.close();
+        },
+      }),
+    };
+  }
+
+  function nativeStreamClient(): LLMClient {
+    return makeClient(0.7, {
+      service: "custom",
+      stream: true,
+      _piModel: {
+        ...MOCK_PI_MODEL,
+        provider: "openai",
+        baseUrl: "https://gateway.example/v1",
+      },
+    });
+  }
+
+  const COMPLETE_SSE = [
+    "data: {\"choices\":[{\"delta\":{\"content\":\"完整的正文内容\"}}]}\n\n",
+    "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+    "data: [DONE]\n\n",
+  ].join("");
+  // 网关把长流掐断：连接正常关闭，但既没有 finish_reason 也没有 [DONE]
+  const TRUNCATED_SSE = "data: {\"choices\":[{\"delta\":{\"content\":\"写到一半的正文\"}}]}\n\n";
+
+  it("retries a native chat stream that closes without [DONE]/finish_reason and succeeds on the retry", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(sseResponse(TRUNCATED_SSE))
+      .mockResolvedValueOnce(sseResponse(COMPLETE_SSE));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await chatCompletion(nativeStreamClient(), "glm-compat", [{ role: "user", content: "写第1章" }]);
+
+    expect(result.content).toBe("完整的正文内容");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.unstubAllGlobals();
+  });
+
+  it("throws instead of returning truncated content when every attempt is cut mid-stream", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => sseResponse(TRUNCATED_SSE));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(chatCompletion(nativeStreamClient(), "glm-compat", [{ role: "user", content: "写第1章" }]))
+      .rejects.toThrow(/Stream interrupted|completion signal/);
+    // 初次 + TRANSIENT_LLM_RETRIES(2) 次重试
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    vi.unstubAllGlobals();
+  });
+
+  it("accepts a native chat stream that ends with finish_reason even when [DONE] is missing", async () => {
+    const sse = [
+      "data: {\"choices\":[{\"delta\":{\"content\":\"内容\"}}]}\n\n",
+      "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+    ].join("");
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse(sse));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await chatCompletion(nativeStreamClient(), "glm-compat", [{ role: "user", content: "hi" }]);
+
+    expect(result.content).toBe("内容");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    vi.unstubAllGlobals();
+  });
+
+  it("retries a pi-ai stream that errors after a long partial instead of silently keeping the truncation", async () => {
+    const longPartial = "长".repeat(600);
+    const partialMsg = makeAssistantMessage(longPartial);
+    const partialThenError: AsyncIterable<Record<string, unknown>> = {
+      [Symbol.asyncIterator]() {
+        let emitted = false;
+        return {
+          async next() {
+            if (!emitted) {
+              emitted = true;
+              return { value: { type: "text_delta", contentIndex: 0, delta: longPartial, partial: partialMsg }, done: false };
+            }
+            // 非关键字错误：验证 PartialResponseError 本身可重试，而非靠错误文案匹配
+            throw new Error("upstream replied with malformed frame");
+          },
+        };
+      },
+    };
+    mockStreamSimple
+      .mockReturnValueOnce(partialThenError as never)
+      .mockReturnValueOnce(makeTextStream("重试后的完整内容") as never);
+
+    const result = await chatCompletion(makeClient(), "test-model", [{ role: "user", content: "写" }]);
+
+    expect(result.content).toBe("重试后的完整内容");
+    expect(mockStreamSimple).toHaveBeenCalledTimes(2);
+  });
+
+  it("treats a pi-ai stream that ends without a done event as interrupted and retries", async () => {
+    const partialMsg = makeAssistantMessage("只有一半");
+    mockStreamSimple
+      .mockReturnValueOnce(makeEventStream([
+        { type: "text_delta", contentIndex: 0, delta: "只有一半", partial: partialMsg },
+      ]) as never)
+      .mockReturnValueOnce(makeTextStream("第二次完整") as never);
+
+    const result = await chatCompletion(makeClient(), "test-model", [{ role: "user", content: "写" }]);
+
+    expect(result.content).toBe("第二次完整");
+    expect(mockStreamSimple).toHaveBeenCalledTimes(2);
   });
 });

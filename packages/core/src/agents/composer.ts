@@ -21,6 +21,12 @@ import {
 import { writeGovernedRuntimeArtifacts } from "../utils/runtime-writer.js";
 import { estimateTextTokens, type LLMClient } from "../llm/provider.js";
 import type { ContextCompressionCallback } from "../models/context-compression.js";
+import {
+  buildSkillContextPlan,
+  contextNeedPurpose,
+  createSkillRegistry,
+  type SkillContextPlan,
+} from "../skills/index.js";
 
 export interface ComposeChapterInput {
   readonly book: BookConfig;
@@ -78,12 +84,18 @@ export async function composeGovernedChapter(input: ComposeChapterInput): Promis
   const storyDir = join(input.bookDir, "story");
   const runtimeDir = join(storyDir, "runtime");
   await mkdir(runtimeDir, { recursive: true });
+  const longformSkill = createSkillRegistry().getSkill("longform-writing");
+  const skillContextPlan = buildSkillContextPlan({
+    skills: longformSkill ? [longformSkill] : [],
+    appliesTo: "composer",
+  });
 
   const selectedContext = await collectSelectedContext(
     storyDir,
     input.plan,
     input.book.language ?? "zh",
     input.outlineSectionSelector,
+    skillContextPlan,
   );
   const initialContextPackage = ContextPackageSchema.parse({
     chapter: input.chapterNumber,
@@ -107,6 +119,10 @@ export async function composeGovernedChapter(input: ComposeChapterInput): Promis
     contextPackage,
     composerInputs: [input.plan.runtimePath],
     notes: budgeted.notes,
+    usedSkills: skillContextPlan.usedSkillIds,
+    promptPacks: skillContextPlan.promptPackIds,
+    contextNeeds: skillContextPlan.contextNeedIds,
+    compression: budgeted.compression,
   });
   const {
     contextPath,
@@ -138,7 +154,11 @@ async function applyContextBudgetIfNeeded(params: {
   readonly contextBudget?: ContextBudget;
   readonly compiler?: CompressibleContextCompiler;
   readonly onContextCompression?: ContextCompressionCallback;
-}): Promise<{ readonly contextPackage: ContextPackage; readonly notes: string[] }> {
+}): Promise<{
+  readonly contextPackage: ContextPackage;
+  readonly notes: string[];
+  readonly compression?: ChapterTrace["compression"];
+}> {
   const budget = params.contextBudget;
   if (!budget || budget.contextWindowTokens <= 0) {
     return { contextPackage: params.contextPackage, notes: [] };
@@ -254,6 +274,14 @@ async function applyContextBudgetIfNeeded(params: {
       ],
     }),
     notes: ["compiled-compressible-context"],
+    compression: {
+      compiledSource: "runtime/compiled-compressible-context",
+      protectedSources: protectedEntries.map((entry) => entry.source),
+      compressedSources: compressibleEntries.map((entry) => entry.source),
+      protectedTokens,
+      compressibleTokens,
+      budgetTokens: compileBudget,
+    },
   };
 }
 
@@ -431,13 +459,18 @@ async function collectSelectedContext(
   plan: PlanChapterOutput,
   language: "zh" | "en",
   outlineSectionSelector?: OutlineSectionSelector,
+  skillContextPlan?: SkillContextPlan,
 ): Promise<ContextPackage["selectedContext"]> {
     const retrievalHints = deriveRetrievalHints(plan);
     const memoBodyExcerpt = plan.memo.body.trim();
     const chapterMemoEntry = memoBodyExcerpt.length > 0
       ? [{
           source: "runtime/chapter_memo",
-          reason: "Carry the planner's chapter memo into governed writing.",
+          reason: skillReason(
+            skillContextPlan,
+            "chapter-memo",
+            "Carry the planner's chapter memo into governed writing.",
+          ),
           excerpt: [
             `goal=${plan.memo.goal}`,
             plan.memo.isGoldenOpening ? "golden-opening=true" : undefined,
@@ -446,16 +479,28 @@ async function collectSelectedContext(
         }]
       : [{
           source: "runtime/chapter_memo",
-          reason: "Carry the planner's chapter memo into governed writing.",
+          reason: skillReason(
+            skillContextPlan,
+            "chapter-memo",
+            "Carry the planner's chapter memo into governed writing.",
+          ),
           excerpt: `goal=${plan.memo.goal}`,
         }];
 
     const entries = await Promise.all([
-      maybeContextSource(storyDir, "current_focus.md", "Current task focus for this chapter."),
+      maybeContextSource(
+        storyDir,
+        "current_focus.md",
+        skillReason(skillContextPlan, "current-focus", "Current task focus for this chapter."),
+      ),
       maybeContextSource(
         storyDir,
         "author_intent.md",
-        "User's long-term authorial intent and direction — binding, overrides model defaults.",
+        skillReason(
+          skillContextPlan,
+          "author-intent",
+          "User's long-term authorial intent and direction — binding, overrides model defaults.",
+        ),
       ),
       maybeContextSource(
         storyDir,
@@ -472,7 +517,11 @@ async function collectSelectedContext(
       ...await maybeOutlineSectionSources(
         storyDir,
         "outline/story_frame.md",
-      "Preserve canon constraints referenced by the active chapter brief or hard constraints.",
+      skillReason(
+        skillContextPlan,
+        "story-frame",
+        "Preserve canon constraints referenced by the active chapter brief or hard constraints.",
+      ),
       plan,
       "story-frame",
       language,
@@ -481,7 +530,11 @@ async function collectSelectedContext(
       ...await maybeOutlineSectionSources(
         storyDir,
         "outline/volume_map.md",
-      "Anchor the default planning node for this chapter.",
+      skillReason(
+        skillContextPlan,
+        "volume-map",
+        "Anchor the default planning node for this chapter.",
+      ),
       plan,
       "volume-map",
       language,
@@ -518,26 +571,42 @@ async function collectSelectedContext(
 
     const summaryEntries = memorySelection.summaries.map((summary) => ({
       source: `story/chapter_summaries.md#${summary.chapter}`,
-      reason: "Relevant episodic memory retrieved for the current chapter goal.",
+      reason: skillReason(
+        skillContextPlan,
+        "episodic-memory",
+        "Relevant episodic memory retrieved for the current chapter goal.",
+      ),
       excerpt: [summary.title, summary.events, summary.stateChanges, summary.hookActivity]
         .filter(Boolean)
         .join(" | "),
     }));
     const factEntries = memorySelection.facts.map((fact) => ({
       source: `story/current_state.md#${toFactAnchor(fact.predicate)}`,
-      reason: "Relevant current-state fact retrieved for the current chapter goal.",
+      reason: skillReason(
+        skillContextPlan,
+        "episodic-memory",
+        "Relevant current-state fact retrieved for the current chapter goal.",
+      ),
       excerpt: `${fact.predicate} | ${fact.object}`,
     }));
     const hookEntries = memorySelection.hooks.map((hook) => ({
       source: `story/pending_hooks.md#${hook.hookId}`,
-      reason: "Carry forward unresolved hooks that match the chapter focus.",
+      reason: skillReason(
+        skillContextPlan,
+        "active-hooks",
+        "Carry forward unresolved hooks that match the chapter focus.",
+      ),
       excerpt: [hook.type, hook.status, hook.expectedPayoff, hook.payoffTiming, hook.notes]
         .filter(Boolean)
         .join(" | "),
     }));
     const volumeSummaryEntries = memorySelection.volumeSummaries.map((summary) => ({
       source: `story/volume_summaries.md#${summary.anchor}`,
-      reason: "Carry forward long-span arc memory compressed from earlier volumes.",
+      reason: skillReason(
+        skillContextPlan,
+        "episodic-memory",
+        "Carry forward long-span arc memory compressed from earlier volumes.",
+      ),
       excerpt: `${summary.heading} | ${summary.content}`,
     }));
 
@@ -553,6 +622,10 @@ async function collectSelectedContext(
       ...volumeSummaryEntries,
       ...hookEntries,
     ];
+}
+
+function skillReason(plan: SkillContextPlan | undefined, needId: string, fallback: string): string {
+  return plan ? contextNeedPurpose(plan, needId, fallback) : fallback;
 }
 
 function deriveRetrievalHints(plan: PlanChapterOutput): string[] {

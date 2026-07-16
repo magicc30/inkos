@@ -1,8 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ToolExecution } from "../../../store/chat/types";
-import { ToolExecutionSteps, buildPlayRunStatusUrl, buildPlaySceneImageUrl, getGeneratedArtifactDetails, getPlayEditDetails, getPlayToolDetails, getProposedActionContractRows, getProposedActionDetails, groupToolExecutionsChronologically } from "../ToolExecutionSteps";
+import { PipelineResultDetails, ToolExecutionSteps, UtilityExecutionRow, buildPlayRunStatusUrl, buildPlaySceneImageUrl, getGeneratedArtifactDetails, getPlayEditDetails, getPlayToolDetails, getProposedActionContractRows, getProposedActionDetails, groupToolExecutionsChronologically } from "../ToolExecutionSteps";
+import { usePreferencesStore } from "../../../store/preferences";
+import { setAppLanguage } from "../../../lib/app-language";
 
 const makeExec = (overrides: Partial<ToolExecution> & { id: string; tool: string }): ToolExecution => ({
   label: "test",
@@ -139,6 +141,44 @@ describe("groupChronologically", () => {
     expect(groups[1].type === "pipeline" ? groups[1].exec.tool : "").toBe("context_compression");
   });
 
+  it("renders narrative forecast operations as visible pipeline cards", () => {
+    const execs: ToolExecution[] = [
+      makeExec({ id: "1", tool: "read", label: "读取章节" }),
+      makeExec({ id: "2", tool: "create_narrative_forecast", label: "剧情推演" }),
+      makeExec({ id: "3", tool: "get_narrative_forecast", label: "核验推演" }),
+      makeExec({ id: "4", tool: "select_narrative_branch", label: "采用分支" }),
+      makeExec({ id: "5", tool: "grep", label: "搜索" }),
+    ];
+
+    const groups = groupToolExecutionsChronologically(execs);
+
+    expect(groups.map((group) => group.type)).toEqual([
+      "utilities",
+      "pipeline",
+      "pipeline",
+      "pipeline",
+      "utilities",
+    ]);
+    expect(groups[1].type === "pipeline" ? groups[1].exec.tool : "").toBe("create_narrative_forecast");
+    expect(groups[2].type === "pipeline" ? groups[2].exec.tool : "").toBe("get_narrative_forecast");
+    expect(groups[3].type === "pipeline" ? groups[3].exec.tool : "").toBe("select_narrative_branch");
+  });
+
+  it("renders generic pipeline result text in an expandable details block", () => {
+    const exec = makeExec({
+      id: "writer-1",
+      tool: "sub_agent",
+      agent: "writer",
+      label: "写下一章",
+      result: "已完成第 1 章：雨棚。这里是更详细的操作结果。",
+    });
+
+    const html = renderToStaticMarkup(React.createElement(ToolExecutionSteps, { executions: [exec] }));
+
+    expect(html).toContain("查看操作结果");
+    expect(html).toContain("已完成第 1 章：雨棚");
+  });
+
   it("extracts generated cover details from public short fiction tools", () => {
     const exec = makeExec({
       id: "short-1",
@@ -160,6 +200,43 @@ describe("groupChronologically", () => {
       salesPackagePath: "shorts/demo-story/final/sales-package.md",
       coverImagePath: "shorts/demo-story/final/cover.png",
     });
+  });
+
+  it("extracts and renders interactive-film creation artifacts", () => {
+    const exec = makeExec({
+      id: "interactive-film-1",
+      tool: "interactive_film_create",
+      label: "互动影游",
+      details: {
+        kind: "interactive_film_created",
+        title: "盛世天下影游方案",
+        projectId: "shengshi-branching",
+        storyGraphPath: "interactive-films/shengshi-branching/story-graph.json",
+        specPath: "interactive-films/shengshi-branching/interactive-spec.md",
+        storyTreePath: "interactive-films/shengshi-branching/story-tree.md",
+        flagsPath: "interactive-films/shengshi-branching/flags.md",
+        scriptPath: "interactive-films/shengshi-branching/script.md",
+        storyboardPath: "interactive-films/shengshi-branching/storyboard.md",
+        imagePromptsPath: "interactive-films/shengshi-branching/image-prompts.md",
+        assetsManifestPath: "interactive-films/shengshi-branching/assets.json",
+      },
+    });
+
+    expect(getGeneratedArtifactDetails(exec)).toMatchObject({
+      kind: "interactive_film_created",
+      projectId: "shengshi-branching",
+      storyGraphPath: "interactive-films/shengshi-branching/story-graph.json",
+      storyTreePath: "interactive-films/shengshi-branching/story-tree.md",
+      flagsPath: "interactive-films/shengshi-branching/flags.md",
+      assetsManifestPath: "interactive-films/shengshi-branching/assets.json",
+    });
+
+    const html = renderToStaticMarkup(React.createElement(ToolExecutionSteps, { executions: [exec] }));
+    expect(html).toContain("互动影游已生成");
+    expect(html).toContain("剧情图谱");
+    expect(html).toContain("剧情树");
+    expect(html).toContain("变量旗标");
+    expect(html).toContain("图片资产");
   });
 
   it("extracts play scene details from play tools", () => {
@@ -411,5 +488,176 @@ describe("groupChronologically", () => {
       action: "fanfic_init",
       targetRoute: undefined,
     });
+  });
+});
+
+describe("tool details default-open preference", () => {
+  beforeEach(() => {
+    usePreferencesStore.setState({ toolDetailsDefaultOpen: true });
+  });
+
+  it("the preferences store defaults to expanded, keeping today's behavior", () => {
+    expect(usePreferencesStore.getState().toolDetailsDefaultOpen).toBe(true);
+  });
+
+  it("renders the pipeline result details expanded when the preference is on (default)", () => {
+    const exec = makeExec({
+      id: "writer-1",
+      tool: "sub_agent",
+      agent: "writer",
+      label: "写下一章",
+      result: "已完成第 1 章：雨棚。这里是更详细的操作结果。",
+    });
+
+    const html = renderToStaticMarkup(React.createElement(ToolExecutionSteps, { executions: [exec] }));
+
+    expect(html).toContain("查看操作结果");
+    expect(html).toContain("<details open");
+  });
+
+  it("renders the pipeline result details collapsed when the preference is off", () => {
+    const html = renderToStaticMarkup(React.createElement(PipelineResultDetails, {
+      result: "已完成第 1 章：雨棚。这里是更详细的操作结果。",
+      defaultOpen: false,
+    }));
+
+    // The block is still there (manually expandable), just not open by default.
+    expect(html).toContain("查看操作结果");
+    expect(html).toContain("已完成第 1 章：雨棚");
+    expect(html).not.toContain("<details open");
+  });
+
+  it("renders the pipeline result details expanded when defaultOpen is true", () => {
+    const html = renderToStaticMarkup(React.createElement(PipelineResultDetails, {
+      result: "已完成第 1 章：雨棚。",
+      defaultOpen: true,
+    }));
+
+    expect(html).toContain("<details open");
+  });
+});
+
+describe("English app language", () => {
+  beforeEach(() => {
+    setAppLanguage("en");
+  });
+
+  afterEach(() => {
+    setAppLanguage("zh");
+  });
+
+  it("renders pipeline status, result summary, and file-operation group in English", () => {
+    const execs: ToolExecution[] = [
+      makeExec({
+        id: "writer-en-1",
+        tool: "sub_agent",
+        agent: "writer",
+        label: "Write",
+        result: "Chapter 1 finished.",
+      }),
+      makeExec({ id: "read-en-1", tool: "read", label: "Read file", args: { path: "books/demo/chapter-1.md" } }),
+    ];
+
+    const html = renderToStaticMarkup(React.createElement(ToolExecutionSteps, { executions: execs }));
+
+    expect(html).toContain("Completed");
+    expect(html).toContain("View result");
+    expect(html).toContain("1 file operation");
+    expect(html).not.toContain("已完成");
+    expect(html).not.toContain("查看操作结果");
+  });
+
+  it("renders interactive-film artifacts and proposal contract rows in English", () => {
+    const filmExec = makeExec({
+      id: "interactive-film-en-1",
+      tool: "interactive_film_create",
+      label: "Interactive film",
+      details: {
+        kind: "interactive_film_created",
+        projectId: "demo-branching",
+        storyGraphPath: "interactive-films/demo-branching/story-graph.json",
+        storyTreePath: "interactive-films/demo-branching/story-tree.md",
+      },
+    });
+
+    const html = renderToStaticMarkup(React.createElement(ToolExecutionSteps, { executions: [filmExec] }));
+    expect(html).toContain("Interactive film generated");
+    expect(html).toContain("Story graph");
+    expect(html).toContain("Story tree");
+    expect(html).not.toContain("互动影游已生成");
+
+    const proposalExec = makeExec({
+      id: "proposal-en-1",
+      tool: "propose_action",
+      label: "Confirm action",
+      details: {
+        kind: "proposed_action",
+        action: "play_start",
+        targetSessionKind: "play",
+        instruction: "Start a cultivation open world.",
+        actionPayload: {
+          playStart: {
+            title: "Outer Gate",
+            worldContract: "Time is the shared world axis.",
+            visualContract: "No colored rarity borders.",
+          },
+        },
+      },
+    });
+
+    const details = getProposedActionDetails(proposalExec);
+    expect(details).not.toBeNull();
+    expect(getProposedActionContractRows(details!).map((row) => row.label)).toEqual([
+      "World contract",
+      "Visual contract",
+    ]);
+  });
+});
+
+describe("UtilityExecutionRow", () => {
+  it("renders an expandable, default-collapsed result body when the execution has a result", () => {
+    const exec = makeExec({
+      id: "read-1",
+      tool: "read",
+      label: "读取文件",
+      args: { path: "books/demo/chapter-1.md" },
+      result: "第一章正文：雨停了，巷口的灯还亮着。",
+    });
+
+    const html = renderToStaticMarkup(React.createElement(UtilityExecutionRow, { exec }));
+
+    expect(html).toContain("read books/demo/chapter-1.md");
+    expect(html).toContain("第一章正文：雨停了，巷口的灯还亮着。");
+    expect(html).toContain("<details");
+    expect(html).not.toContain("<details open");
+  });
+
+  it("renders a plain row without details when the execution has no result", () => {
+    const exec = makeExec({
+      id: "ls-1",
+      tool: "ls",
+      label: "列目录",
+      args: { path: "books/demo" },
+    });
+
+    const html = renderToStaticMarkup(React.createElement(UtilityExecutionRow, { exec }));
+
+    expect(html).toContain("ls books/demo");
+    expect(html).not.toContain("<details");
+  });
+
+  it("treats a whitespace-only result as no result", () => {
+    const exec = makeExec({
+      id: "grep-1",
+      tool: "grep",
+      label: "搜索",
+      args: { pattern: "灯" },
+      result: "   \n  ",
+    });
+
+    const html = renderToStaticMarkup(React.createElement(UtilityExecutionRow, { exec }));
+
+    expect(html).toContain("grep 灯");
+    expect(html).not.toContain("<details");
   });
 });

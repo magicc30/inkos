@@ -243,6 +243,15 @@ describe("ComposerAgent", () => {
 
     expect(result.trace.plannerInputs).toEqual(plan.plannerInputs);
     expect(result.trace.selectedSources).toContain("story/current_focus.md");
+    expect(result.trace.usedSkills).toEqual(["longform-writing"]);
+    expect(result.trace.promptPacks).toEqual([
+      "longform.writer",
+      "longform.reviser",
+      "longform.auditor",
+    ]);
+    expect(result.trace.contextNeeds).toContain("author-intent");
+    expect(result.trace.contextNeeds).toContain("current-focus");
+    expect(result.trace.contextNeeds).toContain("episodic-memory");
     expect(result.trace.contextTiers.protectedSources).toContain("story/current_focus.md");
     expect(result.trace.contextTiers.protectedSources).toContain("story/author_intent.md");
     expect(result.trace.contextTiers.compressibleSources).not.toContain("story/author_intent.md");
@@ -313,6 +322,11 @@ describe("ComposerAgent", () => {
     expect(authorIntent?.excerpt).toContain("Keep the pressure on the mentor conflict.");
     expect(compiled?.excerpt).toContain("压缩后的旧章标题历史");
     expect(result.trace.notes).toContain("compiled-compressible-context");
+    expect(result.trace.compression).toMatchObject({
+      compiledSource: "runtime/compiled-compressible-context",
+      compressedSources: expect.arrayContaining(["story/chapter_summaries.md#recent_titles"]),
+      protectedSources: expect.arrayContaining(["story/author_intent.md"]),
+    });
   });
 
   it("emits story context compression lifecycle events when compiling compressible context", async () => {

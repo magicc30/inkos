@@ -10,7 +10,7 @@ import {
 } from "./use-book-activity";
 
 function msg(event: string, data: unknown, timestamp: number): SSEMessage {
-  return { event, data, timestamp };
+  return { event, data, timestamp, seq: timestamp };
 }
 
 describe("deriveBookActivity", () => {

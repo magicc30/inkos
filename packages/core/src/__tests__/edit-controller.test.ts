@@ -141,6 +141,32 @@ describe("edit controller", () => {
     expect(result.touchedFiles.length).toBeGreaterThan(0);
   });
 
+  it("does not rewrite trashed chapters during entity rename", async () => {
+    const bookDir = join(projectRoot, "books", "trashbook");
+    await mkdir(join(bookDir, "story"), { recursive: true });
+    await mkdir(join(bookDir, "chapters", ".trash"), { recursive: true });
+    await writeFile(join(bookDir, "story", "story_bible.md"), "主角陆尘住在港口。", "utf-8");
+    await writeFile(join(bookDir, "chapters", ".trash", "0009_旧章.md"), "陆尘在被删除的章节里。", "utf-8");
+
+    await executeEditTransaction(
+      {
+        bookDir: (bookId) => join(projectRoot, "books", bookId),
+        loadChapterIndex: async () => [],
+        saveChapterIndex: async () => undefined,
+      },
+      {
+        kind: "entity-rename",
+        bookId: "trashbook",
+        entityType: "protagonist",
+        oldValue: "陆尘",
+        newValue: "林砚",
+      },
+    );
+
+    await expect(readFile(join(bookDir, "story", "story_bible.md"), "utf-8")).resolves.toContain("林砚");
+    await expect(readFile(join(bookDir, "chapters", ".trash", "0009_旧章.md"), "utf-8")).resolves.toContain("陆尘");
+  });
+
   it("does not rewrite story snapshots during entity rename", async () => {
     const bookDir = join(projectRoot, "books", "harbor");
     await writeFile(join(bookDir, "story", "story_bible.md"), "主角陆尘住在港口。", "utf-8");
@@ -280,6 +306,82 @@ describe("edit controller", () => {
     await expect(readFile(join(bookDir, "chapters", "0003_灰墙榜下.md"), "utf-8")).resolves.toContain("新名字");
     expect(savedIndex[0]?.status).toBe("audit-failed");
     expect(savedIndex[0]?.auditIssues.at(-1)).toContain("Manual text edit requires review");
+    expect(result.reviewRequired).toBe(true);
+  });
+
+  it("updates the index word count when patching chapter text", async () => {
+    const bookDir = join(projectRoot, "books", "harbor");
+    await writeFile(join(bookDir, "chapters", "0005_对账.md"), "# 第5章 对账\n\n她核对了三遍账目。", "utf-8");
+    const chapterIndex = [{
+      number: 5,
+      title: "对账",
+      status: "ready-for-review" as const,
+      wordCount: 999,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      auditIssues: [],
+      lengthWarnings: [],
+    }];
+
+    let savedIndex: ChapterMeta[] = [...chapterIndex];
+    await executeEditTransaction(
+      {
+        bookDir: (bookId) => join(projectRoot, "books", bookId),
+        loadChapterIndex: async () => chapterIndex,
+        saveChapterIndex: async (_bookId, index) => {
+          savedIndex = [...index];
+        },
+      },
+      {
+        kind: "chapter-local-edit",
+        bookId: "harbor",
+        chapterNumber: 5,
+        instruction: "Replace the recount detail",
+        targetText: "三遍账目",
+        replacementText: "五遍账目，又签了名",
+      },
+    );
+
+    // Heading + whitespace stripped: "她核对了五遍账目，又签了名。" → 14 chars.
+    expect(savedIndex[0]?.wordCount).toBe(14);
+  });
+
+  it("patches chapter text when the target only differs by whitespace", async () => {
+    const bookDir = join(projectRoot, "books", "harbor");
+    await writeFile(
+      join(bookDir, "chapters", "0004_雨巷.md"),
+      "# 第4章 雨巷\n\n她把账本\n塞进外套里，继续往前走。",
+      "utf-8",
+    );
+    const chapterIndex = [{
+      number: 4,
+      title: "雨巷",
+      status: "ready-for-review" as const,
+      wordCount: 18,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      auditIssues: [],
+      lengthWarnings: [],
+    }];
+
+    const result = await executeEditTransaction(
+      {
+        bookDir: (bookId) => join(projectRoot, "books", bookId),
+        loadChapterIndex: async () => chapterIndex,
+        saveChapterIndex: async () => undefined,
+      },
+      {
+        kind: "chapter-local-edit",
+        bookId: "harbor",
+        chapterNumber: 4,
+        instruction: "Patch wrapped text",
+        targetText: "她把账本 塞进外套里",
+        replacementText: "她把账本贴着胸口藏好",
+      },
+    );
+
+    await expect(readFile(join(bookDir, "chapters", "0004_雨巷.md"), "utf-8"))
+      .resolves.toContain("她把账本贴着胸口藏好，继续往前走。");
     expect(result.reviewRequired).toBe(true);
   });
 

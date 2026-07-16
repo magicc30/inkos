@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { STUDIO_SSE_EVENTS } from "./use-sse";
+import { STUDIO_SSE_EVENTS, collectNewSSEMessages } from "./use-sse";
+import type { SSEMessage } from "./use-sse";
 
 describe("STUDIO_SSE_EVENTS", () => {
   it("covers the server lifecycle events that drive the UI", () => {
@@ -48,5 +49,38 @@ describe("STUDIO_SSE_EVENTS", () => {
       "llm:progress",
       "ping",
     ]));
+  });
+});
+
+function msg(seq: number, event = "log"): SSEMessage {
+  return { event, data: null, timestamp: 1000 + seq, seq };
+}
+
+describe("collectNewSSEMessages", () => {
+  it("returns every message after the cursor, not just the last one", () => {
+    const messages = [msg(1), msg(2, "book:created"), msg(3, "session:title"), msg(4)];
+    const { fresh, nextCursor } = collectNewSSEMessages(messages, 1);
+    expect(fresh.map((message) => message.seq)).toEqual([2, 3, 4]);
+    expect(nextCursor).toBe(4);
+  });
+
+  it("skips the backlog on first subscription and only sets the cursor", () => {
+    const messages = [msg(1), msg(2)];
+    const { fresh, nextCursor } = collectNewSSEMessages(messages, null);
+    expect(fresh).toEqual([]);
+    expect(nextCursor).toBe(2);
+  });
+
+  it("keeps a null cursor while the buffer is empty", () => {
+    const { fresh, nextCursor } = collectNewSSEMessages([], null);
+    expect(fresh).toEqual([]);
+    expect(nextCursor).toBeNull();
+  });
+
+  it("survives buffer trimming as long as retained messages are after the cursor", () => {
+    const messages = [msg(50), msg(51), msg(52)];
+    const { fresh, nextCursor } = collectNewSSEMessages(messages, 49);
+    expect(fresh.map((message) => message.seq)).toEqual([50, 51, 52]);
+    expect(nextCursor).toBe(52);
   });
 });

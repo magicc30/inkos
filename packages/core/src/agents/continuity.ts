@@ -461,7 +461,7 @@ export class ContinuityAuditor extends BaseAgent {
         : "\n\n你有联网搜索能力（search_web / fetch_url）。对于涉及真实年代、人物、事件、地理、政策的内容，你必须用search_web核实，不可凭记忆判断。至少对比2个来源交叉验证。"
       : "";
 
-    const systemPrompt = isEnglish
+    const systemPromptBase = isEnglish
       ? `You are a strict ${genreLabel} web-fiction structural editor. Audit the chapter for completion and structure, not for prose craft. ALL OUTPUT MUST BE IN ENGLISH.${protagonistBlock}${searchNote}
 
 ## Reviewer Scope (hard constraints)
@@ -546,6 +546,7 @@ overall_score 评分校准：
 - 65-74：多处影响阅读体验的问题，节奏或连续性有断裂
 - < 65：结构性问题，需要大幅重写
 综合评分，不要因为单一小问题大幅拉低分数。`;
+    const systemPrompt = await this.withPromptPackGuidance(systemPromptBase, "longform.auditor");
 
     const ledgerBlock = gp.numericalSystem
       ? isEnglish

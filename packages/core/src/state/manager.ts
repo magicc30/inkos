@@ -1,13 +1,49 @@
 import { readFile, writeFile, mkdir, readdir, rm, stat, unlink, open } from "node:fs/promises";
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { join, resolve } from "node:path";
 import type { BookConfig } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import { bootstrapStructuredStateFromMarkdown, resolveDurableStoryProgress } from "./state-bootstrap.js";
 
-export class StateManager {
-  /** Books actively being written by this process — used for same-process stale lock detection. */
-  private readonly activeWrites = new Set<string>();
+const BOOK_LOCK_HEARTBEAT_MS = 30_000;
+const BOOK_LOCK_LEASE_MS = 3 * 60_000;
+const BOOK_LOCK_RELEASE_RETRIES = 4;
 
+interface BookLockMetadata {
+  readonly version: 1;
+  readonly pid: number;
+  readonly token: string;
+  readonly startedAt: number;
+  heartbeatAt: number;
+}
+
+interface ProcessBookLock {
+  readonly metadata: BookLockMetadata;
+  heartbeatTimer?: ReturnType<typeof setInterval>;
+  heartbeatTask?: Promise<void>;
+}
+
+// Studio creates a PipelineRunner per request. Lock ownership therefore has to
+// be shared by every StateManager in this process, not stored on one instance.
+const processBookLocks = new Map<string, ProcessBookLock>();
+
+export class BookWriteLockError extends Error {
+  readonly code = "BOOK_BUSY";
+
+  constructor(
+    readonly bookId: string,
+    readonly lockPath: string,
+    lockData?: string,
+  ) {
+    super(
+      `Book "${bookId}" is locked by an active InkOS write${lockData ? ` (${lockData})` : ""}. ` +
+      "Wait for it to finish or stop the running task, then retry. Stale locks are recovered automatically.",
+    );
+    this.name = "BookWriteLockError";
+  }
+}
+
+export class StateManager {
   constructor(private readonly projectRoot: string) {}
 
   private static defaultAuthorIntent(language: "zh" | "en"): string {
@@ -100,44 +136,215 @@ export class StateManager {
   async acquireBookLock(bookId: string): Promise<() => Promise<void>> {
     await mkdir(this.bookDir(bookId), { recursive: true });
     const lockPath = join(this.bookDir(bookId), ".write.lock");
-    try {
-      const handle = await open(lockPath, "wx");
-      try {
-        await handle.writeFile(`pid:${process.pid} ts:${Date.now()}`, "utf-8");
-      } catch (error) {
-        await handle.close().catch(() => undefined);
-        await unlink(lockPath).catch(() => undefined);
-        throw error;
-      }
-      await handle.close();
-    } catch (e) {
-      const code = (e as NodeJS.ErrnoException | undefined)?.code;
-      if (code === "EEXIST") {
-        const lockData = await readFile(lockPath, "utf-8").catch(() => "pid:unknown ts:unknown");
-        const lockPid = this.extractLockPid(lockData);
-        const isStale =
-          (lockPid !== undefined && !this.isProcessAlive(lockPid)) ||
-          (lockPid === process.pid && !this.activeWrites.has(bookId));
-        if (isStale) {
-          await unlink(lockPath).catch(() => undefined);
-          return this.acquireBookLock(bookId);
-        }
-        throw new Error(
-          `Book "${bookId}" is locked by another process (${lockData}). ` +
-            `If this is stale, delete ${lockPath}`,
-        );
-      }
-      throw e;
+    const lockKey = this.normalizeLockKey(lockPath);
+    const existingOwner = processBookLocks.get(lockKey);
+    if (existingOwner) {
+      throw new BookWriteLockError(bookId, lockPath, this.describeLock(existingOwner.metadata));
     }
-    this.activeWrites.add(bookId);
-    return async () => {
-      this.activeWrites.delete(bookId);
+
+    const now = Date.now();
+    const owner: ProcessBookLock = {
+      metadata: {
+        version: 1,
+        pid: process.pid,
+        token: randomUUID(),
+        startedAt: now,
+        heartbeatAt: now,
+      },
+    };
+    // Reserve synchronously before the first filesystem await so two
+    // StateManager instances in this process cannot race through EEXIST and
+    // mistake the other one's live file for a stale same-process lock.
+    processBookLocks.set(lockKey, owner);
+
+    try {
+      let acquired = false;
+      for (let attempt = 0; attempt < 4 && !acquired; attempt++) {
+        try {
+          await this.createLockFile(lockPath, owner.metadata);
+          acquired = true;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException | undefined)?.code !== "EEXIST") {
+            throw error;
+          }
+
+          let snapshot: Awaited<ReturnType<StateManager["readLockSnapshot"]>>;
+          try {
+            snapshot = await this.readLockSnapshot(lockPath);
+          } catch (snapshotError) {
+            if ((snapshotError as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+              continue;
+            }
+            throw snapshotError;
+          }
+          if (!this.isStaleLock(snapshot.metadata, snapshot.mtimeMs)) {
+            throw new BookWriteLockError(bookId, lockPath, snapshot.raw);
+          }
+          await this.removeStaleLock(lockPath, snapshot.raw);
+        }
+      }
+
+      if (!acquired) {
+        throw new BookWriteLockError(bookId, lockPath);
+      }
+
+      this.startLockHeartbeat(lockPath, lockKey, owner);
+      let released = false;
+      return async () => {
+        if (released) return;
+        released = true;
+        if (owner.heartbeatTimer) clearInterval(owner.heartbeatTimer);
+        await owner.heartbeatTask;
+        if (processBookLocks.get(lockKey)?.metadata.token === owner.metadata.token) {
+          processBookLocks.delete(lockKey);
+        }
+        try {
+          const snapshot = await this.readLockSnapshot(lockPath);
+          if (snapshot.metadata?.token !== owner.metadata.token) {
+            return;
+          }
+          await this.unlinkWithRetry(lockPath);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+            console.warn(`[inkos] Failed to release book lock ${lockPath}: ${String(error)}`);
+          }
+        }
+      };
+    } catch (error) {
+      if (processBookLocks.get(lockKey)?.metadata.token === owner.metadata.token) {
+        processBookLocks.delete(lockKey);
+      }
+      throw error;
+    }
+  }
+
+  private normalizeLockKey(lockPath: string): string {
+    const absolute = resolve(lockPath);
+    return process.platform === "win32" ? absolute.toLowerCase() : absolute;
+  }
+
+  private serializeLock(metadata: BookLockMetadata): string {
+    return JSON.stringify(metadata);
+  }
+
+  private describeLock(metadata: BookLockMetadata): string {
+    return `pid:${metadata.pid} started:${new Date(metadata.startedAt).toISOString()}`;
+  }
+
+  private async createLockFile(lockPath: string, metadata: BookLockMetadata): Promise<void> {
+    const handle = await open(lockPath, "wx");
+    try {
+      await handle.writeFile(this.serializeLock(metadata), "utf-8");
+    } catch (error) {
+      await handle.close().catch(() => undefined);
+      await this.unlinkWithRetry(lockPath).catch(() => undefined);
+      throw error;
+    }
+    await handle.close();
+  }
+
+  private parseLockMetadata(lockData: string): Partial<BookLockMetadata> | undefined {
+    try {
+      const parsed = JSON.parse(lockData) as Record<string, unknown>;
+      const pid = typeof parsed.pid === "number" ? parsed.pid : undefined;
+      const startedAt = typeof parsed.startedAt === "number" ? parsed.startedAt : undefined;
+      const heartbeatAt = typeof parsed.heartbeatAt === "number" ? parsed.heartbeatAt : startedAt;
+      return {
+        ...(parsed.version === 1 ? { version: 1 as const } : {}),
+        ...(pid !== undefined ? { pid } : {}),
+        ...(typeof parsed.token === "string" ? { token: parsed.token } : {}),
+        ...(startedAt !== undefined ? { startedAt } : {}),
+        ...(heartbeatAt !== undefined ? { heartbeatAt } : {}),
+      };
+    } catch {
+      const pid = this.extractLockPid(lockData);
+      const timestampMatch = lockData.match(/ts:(\d+)/);
+      const startedAt = timestampMatch ? Number.parseInt(timestampMatch[1] ?? "", 10) : undefined;
+      if (pid === undefined && startedAt === undefined) return undefined;
+      return {
+        ...(pid !== undefined ? { pid } : {}),
+        ...(Number.isFinite(startedAt) ? { startedAt, heartbeatAt: startedAt } : {}),
+      };
+    }
+  }
+
+  private async readLockSnapshot(lockPath: string): Promise<{
+    readonly raw: string;
+    readonly metadata?: Partial<BookLockMetadata>;
+    readonly mtimeMs: number;
+  }> {
+    const [raw, lockStat] = await Promise.all([
+      readFile(lockPath, "utf-8"),
+      stat(lockPath),
+    ]);
+    return { raw, metadata: this.parseLockMetadata(raw), mtimeMs: lockStat.mtimeMs };
+  }
+
+  private isStaleLock(metadata: Partial<BookLockMetadata> | undefined, mtimeMs: number): boolean {
+    if (metadata?.pid === process.pid) {
+      // No processBookLocks owner existed before this acquisition reserved its
+      // slot, so a same-pid file here can only be orphaned from an older task.
+      return true;
+    }
+    if (metadata?.pid !== undefined && !this.isProcessAlive(metadata.pid)) {
+      return true;
+    }
+    const heartbeatAt = metadata?.heartbeatAt ?? mtimeMs;
+    const hasLeaseMetadata = metadata?.version === 1 && typeof metadata.token === "string";
+    return hasLeaseMetadata && Date.now() - heartbeatAt > BOOK_LOCK_LEASE_MS;
+  }
+
+  private async removeStaleLock(lockPath: string, expectedRaw: string): Promise<void> {
+    const currentRaw = await readFile(lockPath, "utf-8").catch(() => undefined);
+    if (currentRaw === undefined) return;
+    if (currentRaw !== expectedRaw) {
+      return;
+    }
+    await this.unlinkWithRetry(lockPath);
+  }
+
+  private startLockHeartbeat(lockPath: string, lockKey: string, owner: ProcessBookLock): void {
+    const refresh = async () => {
+      if (processBookLocks.get(lockKey)?.metadata.token !== owner.metadata.token) return;
+      const handle = await open(lockPath, "r+");
       try {
-        await unlink(lockPath);
-      } catch {
-        // ignore
+        const currentRaw = await handle.readFile("utf-8");
+        if (this.parseLockMetadata(currentRaw)?.token !== owner.metadata.token) return;
+        owner.metadata.heartbeatAt = Date.now();
+        const serialized = Buffer.from(this.serializeLock(owner.metadata), "utf-8");
+        await handle.write(serialized, 0, serialized.length, 0);
+        await handle.truncate(serialized.length);
+      } finally {
+        await handle.close();
       }
     };
+    owner.heartbeatTimer = setInterval(() => {
+      if (owner.heartbeatTask) return;
+      const task = refresh()
+        .catch((error) => {
+          console.warn(`[inkos] Failed to refresh book lock ${lockPath}: ${String(error)}`);
+        })
+        .finally(() => {
+          if (owner.heartbeatTask === task) owner.heartbeatTask = undefined;
+        });
+      owner.heartbeatTask = task;
+    }, BOOK_LOCK_HEARTBEAT_MS);
+    owner.heartbeatTimer.unref?.();
+  }
+
+  private async unlinkWithRetry(lockPath: string): Promise<void> {
+    for (let attempt = 0; attempt < BOOK_LOCK_RELEASE_RETRIES; attempt++) {
+      try {
+        await unlink(lockPath);
+        return;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException | undefined)?.code;
+        if (code === "ENOENT") return;
+        const retryable = code === "EPERM" || code === "EACCES" || code === "EBUSY";
+        if (!retryable || attempt === BOOK_LOCK_RELEASE_RETRIES - 1) throw error;
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 25 * (attempt + 1)));
+      }
+    }
   }
 
   private extractLockPid(lockData: string): number | undefined {
@@ -267,28 +474,82 @@ export class StateManager {
     const indexPath = join(this.bookDir(bookId), "chapters", "index.json");
     try {
       const raw = await readFile(indexPath, "utf-8");
-      return JSON.parse(raw);
+      const parsed = JSON.parse(raw) as unknown;
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed as ReadonlyArray<ChapterMeta>;
+      if (Array.isArray(parsed)) {
+        const rebuilt = await this.rebuildChapterIndexFromFiles(bookId);
+        return rebuilt.length > 0 ? rebuilt : parsed as ReadonlyArray<ChapterMeta>;
+      }
+    } catch {
+      const rebuilt = await this.rebuildChapterIndexFromFiles(bookId);
+      if (rebuilt.length > 0) return rebuilt;
+    }
+    return [];
+  }
+
+  private async rebuildChapterIndexFromFiles(bookId: string): Promise<ReadonlyArray<ChapterMeta>> {
+    return this.rebuildChapterIndexFromFilesAt(this.bookDir(bookId));
+  }
+
+  private async rebuildChapterIndexFromFilesAt(bookDir: string): Promise<ReadonlyArray<ChapterMeta>> {
+    const chaptersDir = join(bookDir, "chapters");
+    let files: string[];
+    try {
+      files = await readdir(chaptersDir);
     } catch {
       return [];
     }
+
+    const rows = await Promise.all(files.flatMap(async (file) => {
+      const match = file.match(/^(\d+)[_-]?(.*?)\.md$/);
+      if (!match) return [];
+      const number = parseInt(match[1]!, 10);
+      if (!Number.isFinite(number) || number <= 0) return [];
+      const filePath = join(chaptersDir, file);
+      const [metadata, content] = await Promise.all([
+        stat(filePath).catch(() => null),
+        readFile(filePath, "utf-8").catch(() => ""),
+      ]);
+      const timestamp = (metadata?.mtime ?? new Date()).toISOString();
+      const rawTitle = match[2]?.replace(/^_+/, "").replace(/_/g, " ").trim();
+      return [{
+        number,
+        title: rawTitle || `第${number}章`,
+        status: "ready-for-review" as const,
+        wordCount: content.replace(/\s+/g, "").length,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        auditIssues: [],
+        lengthWarnings: [],
+      }];
+    }));
+
+    return rows
+      .flat()
+      .sort((a, b) => a.number - b.number);
   }
 
   async saveChapterIndex(
     bookId: string,
     index: ReadonlyArray<ChapterMeta>,
+    options: { readonly allowEmptyWithChapterFiles?: boolean } = {},
   ): Promise<void> {
-    await this.saveChapterIndexAt(this.bookDir(bookId), index);
+    await this.saveChapterIndexAt(this.bookDir(bookId), index, options);
   }
 
   async saveChapterIndexAt(
     bookDir: string,
     index: ReadonlyArray<ChapterMeta>,
+    options: { readonly allowEmptyWithChapterFiles?: boolean } = {},
   ): Promise<void> {
     const chaptersDir = join(bookDir, "chapters");
     await mkdir(chaptersDir, { recursive: true });
+    const safeIndex = index.length === 0 && !options.allowEmptyWithChapterFiles
+      ? await this.rebuildChapterIndexFromFilesAt(bookDir).then((rebuilt) => rebuilt.length > 0 ? rebuilt : index)
+      : index;
     await writeFile(
       join(chaptersDir, "index.json"),
-      JSON.stringify(index, null, 2),
+      JSON.stringify(safeIndex, null, 2),
       "utf-8",
     );
   }

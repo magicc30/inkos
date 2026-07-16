@@ -4,6 +4,8 @@ export interface SSEMessage {
   readonly event: string;
   readonly data: unknown;
   readonly timestamp: number;
+  /** Monotonic sequence for cursor-based consumers; survives ring-buffer trimming. */
+  readonly seq: number;
 }
 
 export const STUDIO_SSE_EVENTS = [
@@ -55,10 +57,37 @@ export const STUDIO_SSE_EVENTS = [
   "ping",
 ] as const;
 
+export function collectNewSSEMessages(
+  messages: ReadonlyArray<SSEMessage>,
+  cursor: number | null,
+): { readonly fresh: ReadonlyArray<SSEMessage>; readonly nextCursor: number | null } {
+  if (messages.length === 0) return { fresh: [], nextCursor: cursor };
+  const latest = messages[messages.length - 1]!.seq;
+  if (cursor === null) return { fresh: [], nextCursor: latest };
+  if (latest <= cursor) return { fresh: [], nextCursor: cursor };
+  return { fresh: messages.filter((message) => message.seq > cursor), nextCursor: latest };
+}
+
+export function useNewSSEMessages(
+  messages: ReadonlyArray<SSEMessage>,
+  handler: (message: SSEMessage) => void,
+): void {
+  const cursorRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const { fresh, nextCursor } = collectNewSSEMessages(messages, cursorRef.current);
+    cursorRef.current = nextCursor;
+    for (const message of fresh) {
+      handler(message);
+    }
+  }, [handler, messages]);
+}
+
 export function useSSE(url = "/api/v1/events") {
   const [messages, setMessages] = useState<ReadonlyArray<SSEMessage>>([]);
   const [connected, setConnected] = useState(false);
   const esRef = useRef<EventSource | null>(null);
+  const seqRef = useRef(0);
 
   useEffect(() => {
     const es = new EventSource(url);
@@ -70,7 +99,11 @@ export function useSSE(url = "/api/v1/events") {
     const handleEvent = (e: MessageEvent) => {
       try {
         const data = e.data ? JSON.parse(e.data) : null;
-        setMessages((prev) => [...prev.slice(-99), { event: e.type, data, timestamp: Date.now() }]);
+        // Compute outside the state updater: React StrictMode may invoke
+        // updaters twice to verify purity.
+        seqRef.current += 1;
+        const message: SSEMessage = { event: e.type, data, timestamp: Date.now(), seq: seqRef.current };
+        setMessages((prev) => [...prev.slice(-99), message]);
       } catch {
         // ignore parse errors
       }

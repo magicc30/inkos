@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildAgentSystemPrompt } from "../agent/agent-system-prompt.js";
+import { createSkillRegistry } from "../skills/index.js";
 
 describe("buildAgentSystemPrompt", () => {
   describe("mode isolation", () => {
@@ -79,6 +80,47 @@ describe("buildAgentSystemPrompt", () => {
       expect(enPrompt).toContain("style imitation/style analysis/reference-style/prose mimicry=style_imitation");
       expect(enPrompt).toContain("Do not answer by asking for a title/source text/parent-book path");
       expect(enPrompt).toContain("side-story/spinoff/canon-materials=spinoff_create");
+    });
+
+    it("adds forced skill guidance without granting execution authority", () => {
+      const skills = createSkillRegistry().resolveSkills({
+        requestedSkills: ["open-world-play"],
+        sessionKind: "chat",
+      });
+
+      const prompt = buildAgentSystemPrompt(null, "zh", "chat", { skills });
+
+      expect(prompt).toContain("## Skill 指导");
+      expect(prompt).toContain("open-world-play (强制)");
+      expect(prompt).toContain("Skill 只提供专业指导、上下文需求和 prompt pack");
+      expect(prompt).toContain("它不授予执行权限");
+      expect(prompt).toContain("play.start");
+    });
+
+    it("includes the selected skill body as active guidance", () => {
+      const skills = createSkillRegistry({
+        skills: [{
+          id: "detective-play",
+          name: "Detective Play",
+          description: "Detective evidence play.",
+          whenToUse: "Use for detective evidence chains.",
+          triggers: ["侦探"],
+          sessionKinds: ["play"],
+          promptPacks: [],
+          toolHints: [],
+          contextNeeds: [],
+          body: "Evidence must form a recoverable chain; never turn clues into generic atmosphere.",
+          source: "external",
+        }],
+      }).resolveSkills({
+        requestedSkills: ["detective-play"],
+        sessionKind: "chat",
+      });
+
+      const prompt = buildAgentSystemPrompt(null, "en", "chat", { skills });
+
+      expect(prompt).toContain("detective-play (forced)");
+      expect(prompt).toContain("Evidence must form a recoverable chain");
     });
   });
 
@@ -171,6 +213,109 @@ describe("buildAgentSystemPrompt", () => {
       expect(prompt).not.toContain("short_fiction_run");
       expect(prompt).not.toContain("sub_agent");
       expect(prompt).not.toContain("architect");
+    });
+
+    it("fills shortRun.language from the user's requested output language instead of hardcoding the session language", () => {
+      const zhPrompt = buildAgentSystemPrompt(null, "zh", "short");
+      expect(zhPrompt).not.toContain("language=zh、chapters");
+      expect(zhPrompt).toContain("language 填用户要求的产出语言");
+      expect(zhPrompt).toContain("900-1200");
+      expect(zhPrompt).toContain("600-800");
+
+      const enPrompt = buildAgentSystemPrompt(null, "en", "short");
+      expect(enPrompt).not.toContain("language=en, chapters");
+      expect(enPrompt).toContain("the output language the user asked for");
+      expect(enPrompt).toContain("900-1200");
+      expect(enPrompt).toContain("600-800");
+    });
+  });
+
+  describe("script and storyboard modes", () => {
+    it("gates script creation behind a confirmation proposal", () => {
+      const prompt = buildAgentSystemPrompt(null, "zh", "script");
+      expect(prompt).toContain("剧本创作助手");
+      expect(prompt).toContain("propose_action");
+      expect(prompt).toContain("script_create");
+      expect(prompt).toContain("scriptCreate");
+      expect(prompt).toContain("不要在聊天里直接写完整剧本");
+      expect(prompt).toContain("不要凭空改写、压缩或替用户补素材");
+      expect(prompt).not.toContain("script_create：");
+      expect(prompt).not.toContain("storyboard_create：");
+      expect(prompt).not.toContain("short_fiction_run");
+      expect(prompt).not.toContain("play_start");
+      expect(prompt).not.toContain("sub_agent");
+    });
+
+    it("runs script_create only after script creation is confirmed", () => {
+      const prompt = buildAgentSystemPrompt(null, "zh", "script", {
+        actionSource: "button",
+        requestedIntent: "script_create",
+      });
+      expect(prompt).toContain("script_create");
+      expect(prompt).toContain("dramas/");
+      expect(prompt).not.toContain("propose_action");
+      expect(prompt).not.toContain("storyboard_create：");
+      expect(prompt).not.toContain("short_fiction_run");
+      expect(prompt).not.toContain("sub_agent");
+    });
+
+    it("gates storyboard creation behind a confirmation proposal", () => {
+      const prompt = buildAgentSystemPrompt(null, "zh", "storyboard");
+      expect(prompt).toContain("分镜创作助手");
+      expect(prompt).toContain("propose_action");
+      expect(prompt).toContain("storyboard_create");
+      expect(prompt).toContain("storyboardCreate");
+      expect(prompt).toContain("不要在聊天里直接写完整分镜");
+      expect(prompt).toContain("不要凭空改写、压缩或替用户补素材");
+      expect(prompt).not.toContain("script_create：");
+      expect(prompt).not.toContain("storyboard_create：");
+      expect(prompt).not.toContain("short_fiction_run");
+      expect(prompt).not.toContain("play_start");
+      expect(prompt).not.toContain("sub_agent");
+    });
+
+    it("runs storyboard_create only after storyboard creation is confirmed", () => {
+      const prompt = buildAgentSystemPrompt(null, "zh", "storyboard", {
+        actionSource: "button",
+        requestedIntent: "storyboard_create",
+      });
+      expect(prompt).toContain("storyboard_create");
+      expect(prompt).toContain("storyboards/");
+      expect(prompt).not.toContain("propose_action");
+      expect(prompt).not.toContain("script_create：");
+      expect(prompt).not.toContain("short_fiction_run");
+      expect(prompt).not.toContain("sub_agent");
+    });
+
+    it("gates interactive-film creation behind a confirmation proposal", () => {
+      const prompt = buildAgentSystemPrompt(null, "zh", "interactive-film");
+      expect(prompt).toContain("互动影游创作助手");
+      expect(prompt).toContain("propose_action");
+      expect(prompt).toContain("interactive_film_create");
+      expect(prompt).toContain("interactiveFilmCreate");
+      expect(prompt).toContain("变量/旗标");
+      expect(prompt).toContain("多结局");
+      expect(prompt).toContain("不要在聊天里直接写完整交付稿");
+      expect(prompt).not.toContain("script_create：");
+      expect(prompt).not.toContain("storyboard_create：");
+      expect(prompt).not.toContain("play_start：");
+      expect(prompt).not.toContain("short_fiction_run");
+      expect(prompt).not.toContain("sub_agent");
+    });
+
+    it("runs interactive_film_create only after interactive-film creation is confirmed", () => {
+      const prompt = buildAgentSystemPrompt(null, "zh", "interactive-film", {
+        actionSource: "button",
+        requestedIntent: "interactive_film_create",
+      });
+      expect(prompt).toContain("interactive_film_create");
+      expect(prompt).toContain("interactive-films/");
+      expect(prompt).not.toContain("propose_action");
+      expect(prompt).not.toContain("script_create：");
+      expect(prompt).not.toContain("storyboard_create：");
+      expect(prompt).not.toContain("play_start：");
+      expect(prompt).not.toContain("short_fiction_run");
+      expect(prompt).not.toContain("sub_agent");
     });
   });
 

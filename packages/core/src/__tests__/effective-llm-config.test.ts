@@ -374,6 +374,70 @@ describe("resolveEffectiveLLMConfig", () => {
     })).rejects.toThrow(/模型.*kimi-k2\.5.*不属于.*google/);
   });
 
+  it("openrouter 配置了不在静态 bank 的模型时保留用户模型，不回退 checkModel（issue #300）", async () => {
+    await writeProject({
+      configSource: "studio",
+      service: "openrouter",
+      services: [{ service: "openrouter" }],
+      defaultModel: "moonshotai/kimi-k2-thinking",
+    });
+    await writeSecrets({ openrouter: { apiKey: "sk-or" } });
+
+    const result = await resolveEffectiveLLMConfig({
+      consumer: "studio",
+      projectRoot: root,
+      envLayers: { global: {}, project: {}, process: {} },
+      requireApiKey: true,
+    });
+
+    expect(result.llm.service).toBe("openrouter");
+    expect(result.llm.baseUrl).toBe("https://openrouter.ai/api/v1");
+    expect(result.llm.model).toBe("moonshotai/kimi-k2-thinking");
+  });
+
+  it("CLI env 显式指定 openrouter 未列出模型时也直接透传", async () => {
+    await writeProject({
+      configSource: "studio",
+      service: "openrouter",
+      services: [{ service: "openrouter" }],
+      defaultModel: "openrouter/auto",
+    });
+    await writeSecrets({ openrouter: { apiKey: "sk-or" } });
+
+    const result = await resolveEffectiveLLMConfig({
+      consumer: "cli",
+      projectRoot: root,
+      envLayers: {
+        global: {},
+        project: { INKOS_LLM_MODEL: "z-ai/glm-4.7" },
+        process: {},
+      },
+    });
+
+    expect(result.llm.service).toBe("openrouter");
+    expect(result.llm.model).toBe("z-ai/glm-4.7");
+    expect(result.diagnostics.modelSource).toBe("env");
+  });
+
+  it("openrouter 完全没配模型时才回退到 checkModel", async () => {
+    await writeProject({
+      configSource: "studio",
+      service: "openrouter",
+      services: [{ service: "openrouter" }],
+    });
+    await writeSecrets({ openrouter: { apiKey: "sk-or" } });
+
+    const result = await resolveEffectiveLLMConfig({
+      consumer: "studio",
+      projectRoot: root,
+      envLayers: { global: {}, project: {}, process: {} },
+      requireApiKey: true,
+    });
+
+    expect(result.llm.service).toBe("openrouter");
+    expect(result.llm.model).toBe("openrouter/auto");
+  });
+
   it("CLI env 指向 Ollama 时允许用户本地安装的动态模型", async () => {
     await writeProject({
       configSource: "studio",

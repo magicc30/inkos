@@ -908,8 +908,10 @@ describe("WriterAgent", () => {
     const storyDir = join(bookDir, "story");
     const { logger, infos } = createCaptureLogger();
     await mkdir(storyDir, { recursive: true });
+    await mkdir(join(root, "prompt", "longform"), { recursive: true });
 
     await Promise.all([
+      writeFile(join(root, "prompt", "longform", "writer.md"), "PROJECT WRITER OVERRIDE", "utf-8"),
       writeFile(join(storyDir, "story_bible.md"), "# Story Bible\n", "utf-8"),
       writeFile(join(storyDir, "volume_outline.md"), "# Volume Outline\n", "utf-8"),
       writeFile(join(storyDir, "style_guide.md"), "# Style Guide\n", "utf-8"),
@@ -938,7 +940,7 @@ describe("WriterAgent", () => {
       logger,
     });
 
-    vi.spyOn(WriterAgent.prototype as never, "chat" as never)
+    const chatSpy = vi.spyOn(WriterAgent.prototype as never, "chat" as never)
       .mockResolvedValueOnce({
         content: [
           "=== CHAPTER_TITLE ===",
@@ -1007,6 +1009,8 @@ describe("WriterAgent", () => {
         "阶段 2a：提取第1章事实",
         "阶段 2b：把观察结果回写到真相文件",
       ]));
+      const messages = chatSpy.mock.calls[0]?.[0] as ReadonlyArray<{ content: string }> | undefined;
+      expect(messages?.[0]?.content ?? "").toContain("PROJECT WRITER OVERRIDE");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

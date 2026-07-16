@@ -93,6 +93,9 @@ export const ChapterTraceSchema = z.object({
   plannerInputs: z.array(z.string()),
   composerInputs: z.array(z.string()),
   selectedSources: z.array(z.string()),
+  usedSkills: z.array(z.string()).default([]),
+  promptPacks: z.array(z.string()).default([]),
+  contextNeeds: z.array(z.string()).default([]),
   contextTiers: z.object({
     protectedSources: z.array(z.string()).default([]),
     compressibleSources: z.array(z.string()).default([]),
@@ -109,6 +112,14 @@ export const ChapterTraceSchema = z.object({
     compressibleTokens: 0,
     totalSelectedTokens: 0,
   }),
+  compression: z.object({
+    compiledSource: z.string().min(1),
+    protectedSources: z.array(z.string()).default([]),
+    compressedSources: z.array(z.string()).default([]),
+    protectedTokens: z.number().int().nonnegative().default(0),
+    compressibleTokens: z.number().int().nonnegative().default(0),
+    budgetTokens: z.number().int().nonnegative().default(0),
+  }).optional(),
   notes: z.array(z.string()).default([]),
 });
 

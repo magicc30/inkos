@@ -15,6 +15,9 @@ import {
   createPlayStartTool,
   createProposeActionTool,
   createRenameEntityTool,
+  createScriptCreationTool,
+  createStoryboardCreationTool,
+  createInteractiveFilmCreationTool,
   createWriteFileTool,
   createWriteTruthFileTool,
 } from "../agent/agent-tools.js";
@@ -44,7 +47,11 @@ describe("agent deterministic writing tools", () => {
     await mkdir(join(state.bookDir("harbor"), "story", "runtime"), { recursive: true });
     await mkdir(join(state.bookDir("harbor"), "chapters"), { recursive: true });
     await writeFile(join(state.bookDir("harbor"), "story", "story_bible.md"), "# Story Bible\n\nLin Yue guards the jade seal.\n", "utf-8");
-    await writeFile(join(state.bookDir("harbor"), "chapters", "0003_Storm.md"), "# 第3章 风暴\n\nLin Yue kept the jade seal hidden.\n", "utf-8");
+    await writeFile(
+      join(state.bookDir("harbor"), "chapters", "0003_Storm.md"),
+      "# 第3章 风暴\n\nLin Yue kept the jade seal hidden under wet burlap, and she did not tell the guild.\n",
+      "utf-8",
+    );
     await state.saveChapterIndex("harbor", [{
       number: 3,
       title: "风暴",
@@ -121,6 +128,20 @@ describe("agent deterministic writing tools", () => {
         ]),
       }),
     ]);
+  });
+
+  it("patches a high-confidence paragraph match when the model paraphrases the target text", async () => {
+    const tool = createPatchChapterTextTool({} as never, root, "harbor");
+
+    await tool.execute("tool-4-fuzzy", {
+      chapterNumber: 3,
+      targetText: "Lin Yue kept the jade seal under wet burlap and told no one from the guild.",
+      replacementText: "Lin Yue locked the jade seal beneath the altar and let the guild keep guessing.",
+    });
+
+    const updated = await readFile(join(state.bookDir("harbor"), "chapters", "0003_Storm.md"), "utf-8");
+    expect(updated).toContain("beneath the altar");
+    expect(updated).not.toContain("wet burlap");
   });
 
   it("replaces whole chapter text through the deterministic edit controller", async () => {
@@ -285,6 +306,121 @@ describe("agent deterministic writing tools", () => {
         },
       },
     });
+  });
+
+  it("keeps script creation specs in the structured confirmation payload", async () => {
+    const tool = createProposeActionTool("zh");
+
+    const result = await tool.execute("proposal-script", {
+      action: "script_create",
+      instruction: "把冷库账页改成 12 集竖屏短剧，调查线七成、家怨三成。",
+      scriptCreate: {
+        title: "冷库账页",
+        sourceKind: "小说大纲",
+        targetFormat: "vertical_short_drama",
+        requirements: "保留账页、赔偿款、失踪孩子三条线。",
+        episodeCount: 12,
+        episodeDuration: "2分钟",
+      },
+    });
+
+    expect(result.details).toMatchObject({
+      kind: "proposed_action",
+      action: "script_create",
+      targetSessionKind: "script",
+      actionPayload: {
+        scriptCreate: {
+          title: "冷库账页",
+          targetFormat: "vertical_short_drama",
+          episodeCount: 12,
+        },
+      },
+    });
+  });
+
+  it("keeps storyboard specs in the structured confirmation payload", async () => {
+    const tool = createProposeActionTool("zh");
+
+    const result = await tool.execute("proposal-storyboard", {
+      action: "storyboard_create",
+      instruction: "把剧本拆成 9:16 分镜，写实冷色，每场给图像提示词。",
+      storyboardCreate: {
+        title: "冷库账页分镜",
+        sourceKind: "剧本",
+        visualStyle: "写实冷色",
+        aspectRatio: "9:16",
+        granularity: "按场景关键镜头拆分",
+        maxShots: 18,
+      },
+    });
+
+    expect(result.details).toMatchObject({
+      kind: "proposed_action",
+      action: "storyboard_create",
+      targetSessionKind: "storyboard",
+      actionPayload: {
+        storyboardCreate: {
+          title: "冷库账页分镜",
+          visualStyle: "写实冷色",
+          maxShots: 18,
+        },
+      },
+    });
+  });
+
+  it("keeps interactive-film specs in the structured confirmation payload", async () => {
+    const tool = createProposeActionTool("zh");
+
+    const result = await tool.execute("proposal-interactive-film", {
+      action: "interactive_film_create",
+      instruction: "做一个盛世天下式多结局互动影游，包含剧情树、旗标、剧本和分镜。",
+      interactiveFilmCreate: {
+        title: "盛世账页",
+        sourceKind: "投稿需求",
+        requirements: "多分支，多结局，变量记录玩家每次关键抉择。",
+        targetAudience: "欧美互动影游用户",
+        budget: "5000元",
+        referenceMode: "盛世天下式多走向",
+      },
+    });
+
+    expect(result.details).toMatchObject({
+      kind: "proposed_action",
+      action: "interactive_film_create",
+      targetSessionKind: "interactive-film",
+      actionPayload: {
+        interactiveFilmCreate: {
+          title: "盛世账页",
+          budget: "5000元",
+        },
+      },
+    });
+  });
+
+  it("drops non-positive placeholder counts from interactive-film confirmation payloads", async () => {
+    const tool = createProposeActionTool("zh");
+
+    const result = await tool.execute("proposal-interactive-film-zero-count", {
+      action: "interactive_film_create",
+      instruction: "做一个多结局互动影游。",
+      interactiveFilmCreate: {
+        title: "第七阅览室",
+        requirements: "多分支，变量记录，至少两个结局。",
+        episodeCount: 0,
+      },
+    });
+
+    expect(result.details).toMatchObject({
+      kind: "proposed_action",
+      action: "interactive_film_create",
+      actionPayload: {
+        interactiveFilmCreate: {
+          title: "第七阅览室",
+          requirements: "多分支，变量记录，至少两个结局。",
+        },
+      },
+    });
+    expect(JSON.stringify(result.details)).not.toContain("episodeCount");
   });
 
   it("falls back to the tool argument when confirmed play payload contains a truncated initial scene", async () => {
@@ -526,6 +662,24 @@ describe("agent deterministic writing tools", () => {
     expect(pipeline.writeNextChapter).toHaveBeenCalledWith("harbor", 2600);
   });
 
+  it("runs the writer pipeline inside the tool AbortSignal scope", async () => {
+    const controller = new AbortController();
+    const pipeline = {
+      runWithAbortSignal: vi.fn(async (_signal: AbortSignal, task: () => Promise<unknown>) => task()),
+      writeNextChapter: vi.fn(async () => ({ chapterNumber: 4, wordCount: 2600 })),
+    };
+    const tool = createSubAgentTool(pipeline as never, "harbor");
+
+    await tool.execute("tool-writer-abort", {
+      agent: "writer",
+      bookId: "harbor",
+      instruction: "继续写下一章",
+    } as any, controller.signal);
+
+    expect(pipeline.runWithAbortSignal).toHaveBeenCalledWith(controller.signal, expect.any(Function));
+    expect(pipeline.writeNextChapter).toHaveBeenCalledOnce();
+  });
+
   it("does not claim writer success when the chapter audit failed", async () => {
     const pipeline = {
       writeNextChapter: vi.fn(async () => ({
@@ -580,7 +734,15 @@ describe("agent deterministic writing tools", () => {
         fixedIssues: [],
         applied: false,
         status: "unchanged",
-        skippedReason: "Manual revision did not improve merged audit or AI-tell metrics; kept original chapter.",
+        skippedReason: "Manual revision kept original chapter: before blocking=2, critical=1, aiTell=3; after blocking=2, critical=1, aiTell=3.",
+        revisionDiagnostics: {
+          standard: "A revision is applied only when blocking, critical, and AI-tell counts do not worsen, and at least blocking or AI-tell issues improve.",
+          before: { blockingCount: 2, criticalCount: 1, aiTellCount: 3 },
+          after: { blockingCount: 2, criticalCount: 1, aiTellCount: 3 },
+          remainingIssues: [
+            { severity: "critical", category: "Chapter Memo Drift", description: "没有按用户要求重修本章。", suggestion: "重写主冲突。" },
+          ],
+        },
       })),
     };
     const tool = createSubAgentTool(pipeline as never, "harbor");
@@ -593,7 +755,7 @@ describe("agent deterministic writing tools", () => {
       instruction: "整体重写第一章",
     } as any);
 
-    expect(pipeline.reviseDraft).toHaveBeenCalledWith("harbor", 1, "rewrite");
+    expect(pipeline.reviseDraft).toHaveBeenCalledWith("harbor", 1, "rewrite", "整体重写第一章");
     expect(result.details).toMatchObject({
       kind: "chapter_revision",
       bookId: "harbor",
@@ -601,12 +763,17 @@ describe("agent deterministic writing tools", () => {
       mode: "rewrite",
       applied: false,
       status: "unchanged",
-      skippedReason: expect.stringContaining("kept original chapter"),
+      skippedReason: expect.stringContaining("before blocking=2"),
+      revisionDiagnostics: expect.objectContaining({
+        before: { blockingCount: 2, criticalCount: 1, aiTellCount: 3 },
+        after: { blockingCount: 2, criticalCount: 1, aiTellCount: 3 },
+      }),
     });
     expect(result.content[0]?.type).toBe("text");
     if (result.content[0]?.type === "text") {
       expect(result.content[0].text).toContain("Revision not applied");
-      expect(result.content[0].text).toContain("kept original chapter");
+      expect(result.content[0].text).toContain("Revision gate");
+      expect(result.content[0].text).toContain("Chapter Memo Drift");
       expect(result.content[0].text).not.toContain("Revision (rewrite) complete");
     }
   });
@@ -689,6 +856,33 @@ describe("agent deterministic writing tools", () => {
     expect(toolText).not.toContain("short_fiction_run");
   });
 
+  it("exposes script, storyboard, and interactive-film creation as standalone production tools", () => {
+    const pipeline = {
+      createAgentContext: vi.fn(() => ({})),
+    };
+    const scriptTool = createScriptCreationTool(pipeline as never, root);
+    const storyboardTool = createStoryboardCreationTool(pipeline as never, root);
+    const interactiveFilmTool = createInteractiveFilmCreationTool(pipeline as never, root);
+
+    expect(scriptTool.name).toBe("script_create");
+    expect(JSON.stringify(scriptTool.parameters)).toContain("targetFormat");
+    expect(JSON.stringify(scriptTool.parameters)).toContain("episodeCount");
+    expect(JSON.stringify({ description: scriptTool.description, parameters: scriptTool.parameters }))
+      .not.toContain("short_fiction_run");
+
+    expect(storyboardTool.name).toBe("storyboard_create");
+    expect(JSON.stringify(storyboardTool.parameters)).toContain("visualStyle");
+    expect(JSON.stringify(storyboardTool.parameters)).toContain("maxShots");
+    expect(JSON.stringify({ description: storyboardTool.description, parameters: storyboardTool.parameters }))
+      .not.toContain("short_fiction_run");
+
+    expect(interactiveFilmTool.name).toBe("interactive_film_create");
+    expect(JSON.stringify(interactiveFilmTool.parameters)).toContain("referenceMode");
+    expect(JSON.stringify(interactiveFilmTool.parameters)).toContain("budget");
+    expect(JSON.stringify({ description: interactiveFilmTool.description, parameters: interactiveFilmTool.parameters }))
+      .not.toContain("play_start");
+  });
+
   it("allows architect revise mode to use the active book", async () => {
     const pipeline = {
       reviseFoundation: vi.fn(async () => undefined),
@@ -750,7 +944,7 @@ describe("agent deterministic writing tools", () => {
       instruction: "重写第3章",
     } as any);
 
-    expect(pipeline.reviseDraft).toHaveBeenCalledWith("harbor", 3, "spot-fix");
+    expect(pipeline.reviseDraft).toHaveBeenCalledWith("harbor", 3, "spot-fix", "重写第3章");
   });
 
   it("uses explicit exporter params instead of guessing from instruction", async () => {

@@ -218,12 +218,12 @@ export class WriterAgent extends BaseAgent {
       : undefined;
 
     // ── Phase 1: Creative writing (temperature 0.7) ──
-    const creativeSystemPrompt = buildWriterSystemPrompt(
+    const creativeSystemPrompt = await this.withPromptPackGuidance(buildWriterSystemPrompt(
       book, genreProfile, bookRules, bookRulesBody, genreBody, styleGuide, styleFingerprint,
       chapterNumber, "creative", fanficContext, resolvedLanguage,
       input.chapterMemo ? "governed" : "legacy",
       resolvedLengthSpec,
-    );
+    ), "longform.writer");
 
     const creativeUserPrompt = input.chapterMemo && input.contextPackage && input.ruleStack
       ? this.buildGovernedUserPrompt({

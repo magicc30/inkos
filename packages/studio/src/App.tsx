@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, lazy, Suspense } from "react";
 import { useHashRoute } from "./hooks/use-hash-route";
 import type { HashRoute } from "./hooks/use-hash-route";
 import { Sidebar } from "./components/Sidebar";
@@ -15,15 +15,21 @@ import { DaemonControl } from "./pages/DaemonControl";
 import { LogViewer } from "./pages/LogViewer";
 import { GenreManager } from "./pages/GenreManager";
 import { StyleManager } from "./pages/StyleManager";
+import { TranslationManager } from "./pages/TranslationManager";
 import { ImportManager } from "./pages/ImportManager";
 import { RadarView } from "./pages/RadarView";
 import { DoctorView } from "./pages/DoctorView";
+import { StoryPlayer } from "./pages/StoryPlayer";
+import { StoryGraphTree } from "./pages/StoryGraphTree";
+const FlowView = lazy(() => import("./pages/FlowView"));
+const FilmWizard = lazy(() => import("./pages/FilmWizard"));
 import { LanguageSelector } from "./pages/LanguageSelector";
 import { BookSidebar, BookSidebarToggle } from "./components/chat/BookSidebar";
 import { useSSE } from "./hooks/use-sse";
 import { useSessionEvents } from "./hooks/use-session-events";
 import { useTheme } from "./hooks/use-theme";
 import { useI18n } from "./hooks/use-i18n";
+import { setAppLanguage, tr } from "./lib/app-language";
 import { postApi, putApi, useApi } from "./hooks/use-api";
 import { Sun, Moon } from "lucide-react";
 import { House } from "lucide-react";
@@ -39,16 +45,34 @@ export function isBookCreateChatRoute(route: HashRoute): boolean {
   return route.page === "book-create";
 }
 
+export function deriveStartupGate(input: {
+  readonly ready: boolean;
+  readonly projectError: string | null;
+}): "ready" | "loading" | "error" {
+  if (input.ready) return "ready";
+  return input.projectError ? "error" : "loading";
+}
+
 export function App() {
   const { route, setRoute } = useHashRoute();
   const sse = useSSE();
   const { theme, setTheme } = useTheme();
   const { t, lang: currentLang } = useI18n();
-  const { data: project, refetch: refetchProject } = useApi<{ language: string; languageExplicit: boolean }>("/project");
+  const { data: project, error: projectError, refetch: refetchProject } = useApi<{ language: string; languageExplicit: boolean }>("/project");
   const [showLanguageSelector, setShowLanguageSelector] = useState(false);
   const [ready, setReady] = useState(false);
 
   const isDark = theme === "dark";
+
+  // 全局语言同步：app-language 是模块级单例，供用不了 hook 的代码（lib 纯函数、
+  // store slice）读取。这里在渲染期同步赋值，让子组件在同一次渲染里调用 tr() 时
+  // 就读到正确语言（只用 effect 的话，effect 要等本次渲染提交后才执行，本次渲染
+  // 里的 tr() 会读到旧语言）。赋值是幂等的模块变量写入，StrictMode 重复渲染无影
+  // 响；下面的 effect 在语言加载完成和切换时再设置一次，保证提交后的值也正确。
+  setAppLanguage(currentLang);
+  useEffect(() => {
+    setAppLanguage(currentLang);
+  }, [currentLang]);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", isDark);
@@ -82,9 +106,15 @@ export function App() {
     toLogs: () => setRoute({ page: "logs" }),
     toGenres: () => setRoute({ page: "genres" }),
     toStyle: () => setRoute({ page: "style" }),
+    toTranslation: () => setRoute({ page: "translation" }),
     toImport: (tab?: "chapters" | "canon" | "fanfic" | "spinoff" | "imitation") => setRoute({ page: "import", ...(tab ? { tab } : {}) }),
     toRadar: () => setRoute({ page: "radar" }),
     toDoctor: () => setRoute({ page: "doctor" }),
+    toPlay: (projectId: string) => setRoute({ page: "play", projectId }),
+    toFilm: (projectId: string) => setRoute({ page: "film", projectId }),
+    toFlow: (projectId: string) => setRoute({ page: "flow", projectId }),
+    toFilmAuthor: (projectId: string) => setRoute({ page: "film-author", projectId }),
+    toFilmStudio: (projectId: string) => setRoute({ page: "film-studio", projectId }),
   };
 
   const activeBookId = deriveActiveBookId(route);
@@ -95,7 +125,35 @@ export function App() {
         ? "services"
         : route.page;
 
-  if (!ready) {
+  const startupGate = deriveStartupGate({ ready, projectError });
+
+  if (startupGate === "error") {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-6">
+        <div className="max-w-md w-full rounded-2xl border border-destructive/30 bg-destructive/5 p-6 space-y-4">
+          <div>
+            <h1 className="text-lg font-semibold text-destructive">无法加载项目配置 / Failed to load project config</h1>
+            <p className="mt-2 text-sm text-muted-foreground break-all">{projectError}</p>
+          </div>
+          {/* 项目配置没加载出来，语言未知，所以这屏中英双语并排展示。 */}
+          <p className="text-sm text-muted-foreground">
+            请检查项目根目录下的 inkos.json 是否存在且为合法 JSON，然后重试。
+            <br />
+            Check that inkos.json in the project root exists and is valid JSON, then retry.
+          </p>
+          <button
+            type="button"
+            onClick={() => refetchProject()}
+            className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
+          >
+            重试 / Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (startupGate === "loading") {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="w-12 h-12 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
@@ -130,7 +188,7 @@ export function App() {
                className="inline-flex items-center gap-2 rounded-lg border border-border/50 bg-card/70 px-3.5 py-2 text-[17px] font-semibold text-foreground hover:bg-secondary/50 transition-colors"
              >
                <House size={18} />
-               <span>首页</span>
+               <span>{t("bread.home")}</span>
                <span className="text-muted-foreground/70">/</span>
                <span className="font-serif">InkOS Studio</span>
              </button>
@@ -265,6 +323,11 @@ export function App() {
               <StyleManager nav={nav} theme={theme} t={t} />
             </div>
           )}
+          {route.page === "translation" && (
+            <div className="max-w-6xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
+              <TranslationManager nav={nav} theme={theme} t={t} />
+            </div>
+          )}
           {route.page === "import" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
               <ImportManager nav={nav} theme={theme} t={t} initialTab={route.tab} />
@@ -279,6 +342,38 @@ export function App() {
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
               <DoctorView nav={nav} theme={theme} t={t} />
             </div>
+          )}
+          {route.page === "play" && (
+            <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
+              <StoryPlayer projectId={route.projectId} nav={nav} theme={theme} t={t} />
+            </div>
+          )}
+          {route.page === "film" && (
+            <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
+              <StoryGraphTree projectId={route.projectId} nav={nav} theme={theme} t={t} />
+            </div>
+          )}
+          {route.page === "film-author" && (
+            <div className="absolute inset-0 flex min-w-0">
+              <ChatPage
+                activeBookId={route.projectId}
+                mode="interactive-film-authoring"
+                nav={nav}
+                theme={theme}
+                t={t}
+                sse={sse}
+              />
+            </div>
+          )}
+          {route.page === "film-studio" && (
+            <Suspense fallback={<div className="p-6 text-sm">{tr("加载创作向导…", "Loading creation wizard…")}</div>}>
+              <FilmWizard projectId={route.projectId} nav={nav} theme={theme} t={t} sse={sse} />
+            </Suspense>
+          )}
+          {route.page === "flow" && (
+            <Suspense fallback={<div className="p-6 text-sm">{tr("加载流程图…", "Loading flow view…")}</div>}>
+              <FlowView projectId={route.projectId} nav={nav} theme={theme} t={t} />
+            </Suspense>
           )}
         </main>
       </div>

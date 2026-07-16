@@ -615,6 +615,9 @@ function messageEventsToInteractionMessages(events: MessageEvent[]): Interaction
     play_start: "启动互动世界",
     play_revise: "重做互动回合",
     play_step: "推进互动世界",
+    create_narrative_forecast: "剧情多线推演",
+    get_narrative_forecast: "核验剧情推演",
+    select_narrative_branch: "采用候选分支",
   };
 
   const messages: InteractionMessage[] = [];
@@ -630,15 +633,29 @@ function messageEventsToInteractionMessages(events: MessageEvent[]): Interaction
   const flushPendingToolExecutions = () => {
     if (pendingToolExecutions.length === 0) return;
     const last = messages[messages.length - 1];
-    if (last?.role !== "assistant") return;
-    messages[messages.length - 1] = {
-      ...last,
-      toolExecutions: [
-        ...(last.toolExecutions ?? []),
-        ...pendingToolExecutions,
-      ],
-    };
-    pendingToolExecutions = [];
+    const thinking = joinThinking(pendingThinking);
+    if (last?.role === "assistant") {
+      messages[messages.length - 1] = {
+        ...last,
+        ...(thinking ? { thinking: joinThinking([last.thinking, thinking]) } : {}),
+        toolExecutions: [
+          ...(last.toolExecutions ?? []),
+          ...pendingToolExecutions,
+        ],
+      };
+    } else {
+      messages.push({
+        role: "assistant",
+        content: "",
+        ...(thinking ? { thinking } : {}),
+        toolExecutions: pendingToolExecutions,
+        timestamp: pendingToolExecutions.reduce(
+          (latest, execution) => Math.max(latest, execution.completedAt ?? execution.startedAt),
+          0,
+        ),
+      });
+    }
+    clearPending();
   };
   const toolCallKey = (requestId: string, toolCallId: string): string =>
     `${requestId}\0${toolCallId}`;

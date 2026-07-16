@@ -194,11 +194,11 @@ describe("reviser agent — mode field", () => {
 
   it("uses mode param directly", async () => {
     await tool.execute("tc1", { agent: "reviser", instruction: "Fix", bookId: "my-book", chapterNumber: 5, mode: "anti-detect" });
-    expect(reviseDraftMock).toHaveBeenCalledWith("my-book", 5, "anti-detect");
+    expect(reviseDraftMock).toHaveBeenCalledWith("my-book", 5, "anti-detect", "Fix");
   });
 
   it("defaults to spot-fix", async () => {
     await tool.execute("tc2", { agent: "reviser", instruction: "Fix", bookId: "my-book" });
-    expect(reviseDraftMock).toHaveBeenCalledWith("my-book", undefined, "spot-fix");
+    expect(reviseDraftMock).toHaveBeenCalledWith("my-book", undefined, "spot-fix", "Fix");
   });
 });

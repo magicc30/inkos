@@ -214,9 +214,10 @@ export class ReviserAgent extends BaseAgent {
       : characterMatrix;
 
     const autoOutputMode = mode === "auto" ? resolveAutoOutputMode(issues) : "allow-full";
-    const systemPrompt = mode === "auto"
+    const systemPromptBase = mode === "auto"
       ? this.buildAutoSystemPrompt({ langPrefix, gp, protagonistBlock, numericalRule, lengthGuardrail, resolvedLanguage, lengthSpec: options?.lengthSpec, autoOutputMode })
       : this.buildLegacySystemPrompt({ langPrefix, gp, protagonistBlock, numericalRule, lengthGuardrail, mode, resolvedLanguage });
+    const systemPrompt = await this.withPromptPackGuidance(systemPromptBase, "longform.reviser");
 
     const ledgerBlock = gp.numericalSystem
       ? `\n## 资源账本\n${ledger}`
