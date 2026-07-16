@@ -5,7 +5,7 @@
  * 手动管理各子进程，避免 Studio dev 脚本中的 Unix 语法在 Windows 下不兼容
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
 const packagesDir = resolve(root, 'packages');
+const PNPM_VERSION = '11.9.0';
 
 const CYAN = '\x1b[36m';
 const GREEN = '\x1b[32m';
@@ -27,11 +28,50 @@ function log(tag, msg, color = CYAN) {
   console.log(`${color}[${ts}][${tag}]${RESET} ${msg}`);
 }
 
+function quoteShellArg(value) {
+  const text = String(value);
+  if (process.platform === 'win32') {
+    if (!/[\s"&|<>^]/.test(text)) return text;
+    return `"${text.replaceAll('"', '""')}"`;
+  }
+  return `'${text.replaceAll("'", "'\\''")}'`;
+}
+
+function commandWorks(command) {
+  const commandLine = [command, '--version'].map(quoteShellArg).join(' ');
+  const result = spawnSync(commandLine, {
+    cwd: root,
+    shell: true,
+    stdio: 'ignore',
+  });
+  return result.status === 0;
+}
+
+function spawnCommand(cmd, args, options) {
+  const commandLine = [cmd, ...args].map(quoteShellArg).join(' ');
+  return spawn(commandLine, {
+    shell: true,
+    ...options,
+  });
+}
+
+function resolvePnpmCommand() {
+  if (commandWorks('pnpm')) return { cmd: 'pnpm', prefixArgs: [] };
+  if (commandWorks('corepack')) {
+    log('inkos', '未检测到全局 pnpm，将通过 Corepack 启动', YELLOW);
+    return { cmd: 'corepack', prefixArgs: ['pnpm'] };
+  }
+  if (commandWorks('npx')) {
+    log('inkos', `未检测到全局 pnpm，将通过 npx 使用 pnpm@${PNPM_VERSION}`, YELLOW);
+    return { cmd: 'npx', prefixArgs: ['--yes', `pnpm@${PNPM_VERSION}`] };
+  }
+  throw new Error('未检测到 pnpm、corepack 或 npx，请先安装 Node.js（含 npm）');
+}
+
 function runSync(cmd, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, {
+    const child = spawnCommand(cmd, args, {
       stdio: 'inherit',
-      shell: true,
       cwd: root,
       ...options,
     });
@@ -45,9 +85,8 @@ function runSync(cmd, args, options = {}) {
 
 function startDaemon(tag, cmd, args, options = {}) {
   log(tag, `> ${cmd} ${args.join(' ')}`, GREEN);
-  const child = spawn(cmd, args, {
+  const child = spawnCommand(cmd, args, {
     stdio: ['ignore', 'pipe', 'pipe'],
-    shell: true,
     cwd: root,
     ...options,
   });
@@ -70,31 +109,37 @@ function startDaemon(tag, cmd, args, options = {}) {
   return child;
 }
 
-function cleanup() {
+function cleanup(exitCode = 0) {
   log('inkos', '正在关闭所有子进程...', YELLOW);
   for (const child of children) {
     if (!child.killed) {
       child.kill('SIGTERM');
     }
   }
-  process.exit(0);
+  process.exit(exitCode);
 }
 
-process.on('SIGINT', cleanup);
-process.on('SIGTERM', cleanup);
+process.on('SIGINT', () => cleanup());
+process.on('SIGTERM', () => cleanup());
 
 async function main() {
   log('inkos', '🚀 InkOS 开发环境启动中...', GREEN);
   console.log();
 
-  // 1. 检查依赖
-  if (!existsSync(resolve(root, 'node_modules'))) {
-    log('inkos', '📦 未检测到 node_modules，正在安装依赖...');
-    await runSync('pnpm', ['install']);
-    log('inkos', '✅ 依赖安装完成', GREEN);
-  } else {
-    log('inkos', '📦 node_modules 已存在，跳过安装');
-  }
+  const pnpm = resolvePnpmCommand();
+  const runPnpm = (args, options) => runSync(pnpm.cmd, [...pnpm.prefixArgs, ...args], options);
+  const startPnpm = (tag, args, options) => startDaemon(tag, pnpm.cmd, [...pnpm.prefixArgs, ...args], options);
+
+  // 1. 同步依赖。仅检查 node_modules 是否存在无法覆盖拉取代码后锁文件已变化的情况，
+  //    CI 模式可避免 pnpm 因需要重建 modules 目录而等待交互确认。
+  log('inkos', '📦 正在同步项目依赖...');
+  await runPnpm(['install', '--frozen-lockfile', '--prefer-offline'], {
+    env: {
+      ...process.env,
+      CI: 'true',
+    },
+  });
+  log('inkos', '✅ 项目依赖已同步', GREEN);
 
   // 2. 检查环境变量
   if (!existsSync(resolve(root, '.env'))) {
@@ -103,14 +148,14 @@ async function main() {
 
   // 3. 先构建 core（cli 和 studio 都依赖它）
   log('inkos', '🔨 构建 @actalk/inkos-core...');
-  await runSync('pnpm', ['--filter', '@actalk/inkos-core', 'build']);
+  await runPnpm(['--filter', '@actalk/inkos-core', 'build']);
   log('inkos', '✅ Core 构建完成', GREEN);
 
   // 4. 启动 core watch（增量编译）
-  startDaemon('core', 'pnpm', ['--filter', '@actalk/inkos-core', 'dev']);
+  startPnpm('core', ['--filter', '@actalk/inkos-core', 'dev']);
 
   // 5. 启动 Studio 前端（Vite）
-  startDaemon('studio-fe', 'pnpm', ['--filter', '@actalk/inkos-studio', 'dev:client']);
+  startPnpm('studio-fe', ['--filter', '@actalk/inkos-studio', 'dev:client']);
 
   // 6. 启动 Studio 后端（Hono API Server）
   //    直接用 tsx 启动，避免 dev:server 脚本中的 Unix 语法在 Windows 下不兼容
@@ -126,7 +171,7 @@ async function main() {
   });
 
   // 7. 启动 CLI watch
-  startDaemon('cli', 'pnpm', ['--filter', '@actalk/inkos', 'dev']);
+  startPnpm('cli', ['--filter', '@actalk/inkos', 'dev']);
 
   console.log();
   log('inkos', '✅ 所有服务已启动：', GREEN);
@@ -141,6 +186,5 @@ async function main() {
 
 main().catch((err) => {
   log('inkos', `❌ 启动失败: ${err.message}`, RED);
-  cleanup();
-  process.exit(1);
+  cleanup(1);
 });
